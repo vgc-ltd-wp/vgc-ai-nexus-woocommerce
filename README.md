@@ -11,7 +11,7 @@ Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooC
 | WordPress | 6.0+ |
 | PHP | 8.0+ |
 | WooCommerce | 7.0+ |
-| [MCP Adapter](https://wordpress.org/plugins/mcp-server/) | Latest |
+| [MCP Adapter](https://github.com/WordPress/mcp-adapter) | Latest |
 | [VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus) | 2.6.0+ |
 
 ## Installation
