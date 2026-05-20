@@ -10,7 +10,7 @@
  * Author URI:        https://vgc.com
  * License:           GPL v2 or later
  * Text Domain:       mcp-abilities-woo
- * Requires Plugins:  mcp-abilities, woocommerce
+ * Requires Plugins:  vgc-ai-nexus, woocommerce
  */
 
 defined( 'ABSPATH' ) || exit;
