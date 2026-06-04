@@ -17,7 +17,7 @@ Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooC
 ## Installation
 
 1. Ensure **MCP Adapter** and **VGC AI Nexus** are installed and active.
-2. Upload the `mcp-abilities-woocommerce` folder to `/wp-content/plugins/`.
+2. Upload the `vgc-ai-nexus-woocommerce` folder to `/wp-content/plugins/`.
 3. Activate **VGC AI Nexus for WooCommerce** in *Plugins → Installed Plugins*.
 4. Go to **AI Nexus → Extensions → WooCommerce** to enable or disable tool groups.
 
