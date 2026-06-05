@@ -3,7 +3,7 @@
  * Plugin Name:       VGC AI Nexus for WooCommerce
  * Plugin URI:        https://vgc.com/ai-nexus/woocommerce
  * Description:       Extends VGC AI Nexus with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP. Requires VGC AI Nexus and WooCommerce.
- * Version:           1.6.2
+ * Version:           1.6.3
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            VGC
@@ -15,7 +15,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MCP_WOO_VERSION', '1.6.2' );
+define( 'MCP_WOO_VERSION', '1.6.3' );
 define( 'MCP_WOO_FILE',    __FILE__ );
 define( 'MCP_WOO_DIR',     plugin_dir_path( __FILE__ ) );
 
@@ -166,16 +166,22 @@ function mcp_woo_get_groups(): array {
  */
 function mcp_woo_discover_abilities(): array {
     $abilities = [];
+    $has_crud  = class_exists( '\MCP_Abilities\Crud_Ability' );
     foreach ( mcp_woo_get_groups() as $group ) {
         if ( ! $group->is_enabled() ) {
             continue;
         }
-        // get_mcp_abilities() honours the site-wide consolidation toggle: when on,
-        // a multi-ability group is returned as a single Crud_Ability dispatcher
-        // (which enforces per-op enable/permission internally); when off, the
-        // individual abilities are returned and disabled ones are filtered here.
-        foreach ( $group->get_mcp_abilities() as $ability ) {
-            if ( $ability instanceof \MCP_Abilities\Crud_Ability || $ability->is_enabled() ) {
+        // get_mcp_abilities() honours the site-wide consolidation toggle (AI Nexus
+        // >= 2.7.0): a multi-ability group is returned as a single Crud_Ability
+        // dispatcher. On older AI Nexus that lacks the method, fall back to the
+        // individual abilities so a version mismatch degrades instead of fataling.
+        $list = method_exists( $group, 'get_mcp_abilities' )
+            ? $group->get_mcp_abilities()
+            : $group->get_abilities();
+
+        foreach ( $list as $ability ) {
+            $is_dispatcher = $has_crud && $ability instanceof \MCP_Abilities\Crud_Ability;
+            if ( $is_dispatcher || $ability->is_enabled() ) {
                 $abilities[] = $ability;
             }
         }
