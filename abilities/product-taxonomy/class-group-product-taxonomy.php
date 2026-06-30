@@ -12,6 +12,12 @@ class Product_Taxonomy_Group extends Ability_Group {
         $this->label       = __( 'WooCommerce – Product Taxonomy', 'mcp-abilities-woo' );
         $this->description = __( 'Manage WooCommerce product categories and product tags.', 'mcp-abilities-woo' );
         $this->icon        = 'dashicons-tag';
+        $this->guide       = __( "Organise your shop: create and manage product categories and tags so customers can browse and filter easily.", 'mcp-abilities-woo' );
+        $this->examples    = [
+            __( "Create a 'Summer Collection' product category", 'mcp-abilities-woo' ),
+            __( "List all product categories", 'mcp-abilities-woo' ),
+            __( "Tag these products as 'handmade'", 'mcp-abilities-woo' ),
+        ];
     }
 
     protected function register_abilities(): void {

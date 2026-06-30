@@ -12,6 +12,12 @@ class Product_Management_Group extends Ability_Group {
         $this->label       = __( 'WooCommerce – Products', 'mcp-abilities-woo' );
         $this->description = __( 'Create, read, update and delete WooCommerce products and their variations.', 'mcp-abilities-woo' );
         $this->icon        = 'dashicons-cart';
+        $this->guide       = __( "Manage your catalogue end to end: create products, edit prices and stock, update descriptions, and handle variations.", 'mcp-abilities-woo' );
+        $this->examples    = [
+            __( "Create a simple product 'Ceramic Mug' priced at 18 EUR", 'mcp-abilities-woo' ),
+            __( "Set the stock for SKU MUG-01 to 50", 'mcp-abilities-woo' ),
+            __( "Update the description on my Bestseller product", 'mcp-abilities-woo' ),
+        ];
     }
 
     /**

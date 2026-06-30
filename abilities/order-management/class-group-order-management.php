@@ -12,6 +12,12 @@ class Order_Management_Group extends Ability_Group {
         $this->label       = __( 'WooCommerce – Orders', 'mcp-abilities-woo' );
         $this->description = __( 'List, inspect and update WooCommerce orders and their statuses.', 'mcp-abilities-woo' );
         $this->icon        = 'dashicons-clipboard';
+        $this->guide       = __( "Stay on top of orders: list and inspect them, check statuses, and move orders along - for example mark one as completed - from the chat.", 'mcp-abilities-woo' );
+        $this->examples    = [
+            __( "List today's processing orders", 'mcp-abilities-woo' ),
+            __( "Mark order #1052 as completed", 'mcp-abilities-woo' ),
+            __( "What is in order #1048 and who placed it?", 'mcp-abilities-woo' ),
+        ];
     }
 
     protected function register_abilities(): void {

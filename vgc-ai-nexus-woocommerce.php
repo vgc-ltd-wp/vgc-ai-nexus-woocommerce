@@ -3,7 +3,7 @@
  * Plugin Name:       VGC AI Nexus for WooCommerce
  * Plugin URI:        https://tools.vgc-ltd.com
  * Description:       Extends VGC AI Nexus with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP. Requires VGC AI Nexus and WooCommerce.
- * Version:           1.6.4
+ * Version:           1.7.0
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            VGC
@@ -15,7 +15,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MCP_WOO_VERSION', '1.6.4' );
+define( 'MCP_WOO_VERSION', '1.7.0' );
 define( 'MCP_WOO_FILE',    __FILE__ );
 define( 'MCP_WOO_DIR',     plugin_dir_path( __FILE__ ) );
 
