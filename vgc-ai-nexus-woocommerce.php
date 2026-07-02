@@ -3,7 +3,7 @@
  * Plugin Name:       VGC AI Nexus for WooCommerce
  * Plugin URI:        https://tools.vgc-ltd.com
  * Description:       Extends VGC AI Nexus with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP. Requires VGC AI Nexus and WooCommerce.
- * Version:           1.7.1
+ * Version:           1.7.2
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            VGC
@@ -16,11 +16,11 @@
 defined( 'ABSPATH' ) || exit;
 
 /* VGC self-hosted updates: shows the native WordPress "Update now" button (no token; manifest is public). */
+define( 'MCP_WOO_VERSION', '1.7.2' );
 require_once __DIR__ . '/includes/class-vgc-plugin-updater.php';
-new \VGC_Plugin_Updater( __FILE__, 'vgc-ai-nexus-woocommerce', '1.7.1', 'https://raw.githubusercontent.com/vgc-ltd-wp/vgc-plugin-updates/main/plugins.json' );
+new \VGC_Plugin_Updater( __FILE__, 'vgc-ai-nexus-woocommerce', MCP_WOO_VERSION, 'https://raw.githubusercontent.com/vgc-ltd-wp/vgc-plugin-updates/main/plugins.json' );
 
 
-define( 'MCP_WOO_VERSION', '1.7.1' );
 define( 'MCP_WOO_FILE',    __FILE__ );
 define( 'MCP_WOO_DIR',     plugin_dir_path( __FILE__ ) );
 
@@ -130,6 +130,8 @@ function mcp_woo_get_groups(): array {
     $dirs     = glob( MCP_WOO_DIR . 'abilities/*', GLOB_ONLYDIR ) ?: [];
     $groups   = [];
 
+    static $loaded_by_us = [];
+
     foreach ( $dirs as $dir ) {
         $slug       = basename( $dir );
         $group_file = trailingslashit( $dir ) . 'class-group-' . $slug . '.php';
@@ -138,11 +140,23 @@ function mcp_woo_get_groups(): array {
             continue;
         }
 
-        require_once $group_file;
 
         // "product-taxonomy" → "Product_Taxonomy_Group"
         $class_suffix = str_replace( '-', '_', $slug );
         $class_name   = 'MCP_Abilities\\Groups\\' . ucwords( $class_suffix, '_' ) . '_Group';
+
+        // Group classes share the MCP_Abilities\Groups namespace with core and
+        // every other extension. If a class with this name already exists and WE
+        // didn't define it, loading our file would fatal with "cannot redeclare"
+        // (this took a site down when an extension group slug matched a core
+        // group). Skip the foreign collision gracefully instead.
+        if ( ! isset( $loaded_by_us[ $class_name ] ) ) {
+            if ( class_exists( $class_name, false ) ) {
+                continue;
+            }
+            require_once $group_file;
+            $loaded_by_us[ $class_name ] = true;
+        }
 
         if ( ! class_exists( $class_name ) ) {
             continue;
