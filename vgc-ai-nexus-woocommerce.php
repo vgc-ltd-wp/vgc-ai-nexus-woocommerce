@@ -3,7 +3,7 @@
  * Plugin Name:       VGC AI Nexus for WooCommerce
  * Plugin URI:        https://tools.vgc-ltd.com
  * Description:       Extends VGC AI Nexus with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP. Requires VGC AI Nexus and WooCommerce.
- * Version:           1.7.2
+ * Version:           1.7.3
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            VGC
@@ -16,7 +16,7 @@
 defined( 'ABSPATH' ) || exit;
 
 /* VGC self-hosted updates: shows the native WordPress "Update now" button (no token; manifest is public). */
-define( 'MCP_WOO_VERSION', '1.7.2' );
+define( 'MCP_WOO_VERSION', '1.7.3' );
 require_once __DIR__ . '/includes/class-vgc-plugin-updater.php';
 new \VGC_Plugin_Updater( __FILE__, 'vgc-ai-nexus-woocommerce', MCP_WOO_VERSION, 'https://raw.githubusercontent.com/vgc-ltd-wp/vgc-plugin-updates/main/plugins.json' );
 
@@ -82,7 +82,16 @@ add_action( 'mcp_abilities_loaded', function ( \MCP_Abilities\Plugin $core_plugi
             // WP REST validation: rest_is_object([]) = false for PHP [] (empty params),
             // so removing 'type' lets optional-only abilities accept empty {}.
             $wp_schema = $ability->get_input_schema();
-            unset( $wp_schema['type'] );
+            // Strict-client-valid schema: Claude Desktop 1.17377+ rejects the whole
+            // connector if any tool schema lacks type:"object" or serializes properties
+            // as []. Foreign MCP adapters (WooCommerce 10.9 bundles one; AIOSEO installs
+            // one) can serve this raw registration verbatim, so it must be valid as stored.
+            $wp_schema['type'] = 'object';
+            if ( empty( $wp_schema['properties'] ) || ! is_array( $wp_schema['properties'] ) ) {
+                $wp_schema['properties'] = [
+                    'verbose' => [ 'type' => 'boolean', 'description' => 'Reserved for future use. Has no effect.' ],
+                ];
+            }
 
             wp_register_ability( $name, [
                 'category'            => 'woocommerce',
