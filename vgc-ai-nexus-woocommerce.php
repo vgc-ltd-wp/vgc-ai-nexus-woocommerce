@@ -3,7 +3,7 @@
  * Plugin Name:       VGC AI Nexus for WooCommerce
  * Plugin URI:        https://tools.vgc-ltd.com
  * Description:       Extends VGC AI Nexus with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP. Requires VGC AI Nexus and WooCommerce.
- * Version:           1.7.3
+ * Version:           1.8.0
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            VGC
@@ -16,7 +16,7 @@
 defined( 'ABSPATH' ) || exit;
 
 /* VGC self-hosted updates: shows the native WordPress "Update now" button (no token; manifest is public). */
-define( 'MCP_WOO_VERSION', '1.7.3' );
+define( 'MCP_WOO_VERSION', '1.8.0' );
 require_once __DIR__ . '/includes/class-vgc-plugin-updater.php';
 new \VGC_Plugin_Updater( __FILE__, 'vgc-ai-nexus-woocommerce', MCP_WOO_VERSION, 'https://raw.githubusercontent.com/vgc-ltd-wp/vgc-plugin-updates/main/plugins.json' );
 
@@ -274,3 +274,33 @@ function mcp_woo_make_tool( \MCP_Abilities\Ability $ability ) {
 
     return $tool;
 }
+
+// ── Usage guide section ──────────────────────────────────────────────────────
+// Contributes this extension's section (and its anti-patterns) to the guide
+// served by core's usage_guide ability, so an AI caller can read what this
+// extension can do instead of inferring it.
+add_filter( 'mcp_abilities_guide_sections', function ( array $sections ): array {
+    if ( ! class_exists( 'WooCommerce' ) ) {
+        return $sections;
+    }
+    $body = <<<'MD'
+Manages the WooCommerce catalogue and orders: woocommerce-product-management,
+woocommerce-product-taxonomy, woocommerce-order-management,
+woocommerce-customer-management and woocommerce-coupon-management. Each takes an
+action parameter selecting a wc_ prefixed operation.
+
+Anti-patterns:
+
+- WooCommerce 10.9 and later registers its OWN abilities too, named
+  woocommerce/... such as products-query and product-update. Those are a
+  different and smaller set. The tools listed above are the AI Nexus ones and
+  are what this guide documents.
+- Products carry many taxonomies, including product attributes named
+  pa_something. Call list_terms before filtering by one instead of guessing
+  term slugs.
+- Variations belong to a parent product. Read the parent with wc_get_product
+  before changing a variation.
+MD;
+    $sections['woocommerce'] = [ 'title' => 'WooCommerce extension', 'body' => $body ];
+    return $sections;
+} );
