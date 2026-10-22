@@ -3,7 +3,7 @@
  * Plugin Name:       VGC AI Nexus for WooCommerce
  * Plugin URI:        https://tools.vgc-ltd.com
  * Description:       Extends VGC AI Nexus with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP. Requires VGC AI Nexus and WooCommerce.
- * Version:           1.8.0
+ * Version:           1.8.1
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            VGC
@@ -16,7 +16,7 @@
 defined( 'ABSPATH' ) || exit;
 
 /* VGC self-hosted updates: shows the native WordPress "Update now" button (no token; manifest is public). */
-define( 'MCP_WOO_VERSION', '1.8.0' );
+define( 'MCP_WOO_VERSION', '1.8.1' );
 require_once __DIR__ . '/includes/class-vgc-plugin-updater.php';
 new \VGC_Plugin_Updater( __FILE__, 'vgc-ai-nexus-woocommerce', MCP_WOO_VERSION, 'https://raw.githubusercontent.com/vgc-ltd-wp/vgc-plugin-updates/main/plugins.json' );
 
@@ -46,7 +46,12 @@ add_action( 'mcp_abilities_loaded', function ( \MCP_Abilities\Plugin $core_plugi
     } );
 
     // ── Discover enabled WooCommerce abilities for adapter registration ──────
-    $abilities = mcp_woo_discover_abilities();
+    // Built on first use (init or later). Building translates labels, and
+    // doing it here on plugins_loaded logs "translation loaded too early".
+    $abilities = static function (): array {
+        static $list = null;
+        return $list ??= mcp_woo_discover_abilities();
+    };
 
     // ── Register with the admin Extensions page ───────────────────────────────
     add_filter( 'mcp_abilities_extensions', function ( array $extensions ): array {
@@ -67,6 +72,9 @@ add_action( 'mcp_abilities_loaded', function ( \MCP_Abilities\Plugin $core_plugi
 
     // ── 1. Register our category ──────────────────────────────────────────────
     add_action( 'wp_abilities_api_categories_init', function (): void {
+        if ( function_exists( 'wp_has_ability_category' ) && wp_has_ability_category( 'woocommerce' ) ) {
+            return;
+        }
         wp_register_ability_category( 'woocommerce', [
             'label'       => __( 'WooCommerce', 'mcp-abilities-woo' ),
             'description' => __( 'WooCommerce product, order, customer and coupon management.', 'mcp-abilities-woo' ),
@@ -75,7 +83,7 @@ add_action( 'mcp_abilities_loaded', function ( \MCP_Abilities\Plugin $core_plugi
 
     // ── 2. Register each ability with the WP Abilities API ────────────────────
     add_action( 'wp_abilities_api_init', function () use ( $abilities ): void {
-        foreach ( $abilities as $ability ) {
+        foreach ( $abilities() as $ability ) {
             $name = 'woocommerce/' . mcp_woo_ability_slug( $ability->get_key() );
 
             // Strip top-level 'type' — same fix as core plugin (v2.4.0).
@@ -114,7 +122,7 @@ add_action( 'mcp_abilities_loaded', function ( \MCP_Abilities\Plugin $core_plugi
     // Falls back to string ability names if McpTool::fromArray is unavailable
     // (e.g. WooCommerce bundles an older McpTool class without fromArray).
     add_filter( 'mcp_adapter_default_server_config', function ( array $config ) use ( $abilities ): array {
-        foreach ( $abilities as $ability ) {
+        foreach ( $abilities() as $ability ) {
             $tool = mcp_woo_make_tool( $ability );
             if ( null !== $tool ) {
                 $config['tools'][] = $tool;
