@@ -2,6 +2,8 @@
 
 Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP.
 
+**Version 1.9.0.**
+
 ---
 
 ## Requirements
@@ -82,11 +84,20 @@ All tools enforce WooCommerce's own capability system:
 - Order tools require `edit_shop_orders`
 - Coupon tools require `manage_woocommerce`
 
+**Each object is checked too (1.9.0).** Besides the tool's capability, every product, order, coupon and customer is checked against the caller's permission on that one object, the way WooCommerce's own screens do. Administrators and shop managers see no change; it matters for roles that may handle only their own products or orders (multi-vendor plugins, custom roles). Something the caller may not read answers like a missing one and is left out of lists.
+
+- Products: reading follows AI Nexus core's rule (published products are readable; drafts, pending, private and trashed ones need `edit_post`); updating needs `edit_post`, deleting or trashing `delete_post`, and publishing or making private `publish_post`. A variation is checked on its parent product.
+- Orders: `read_shop_order` / `edit_shop_order` on that order, or `manage_woocommerce` (WooCommerce's rule for its order screen, also with HPOS).
+- Coupons: listed only when the caller may edit that coupon.
+- Customers: `list_users` (what WooCommerce's REST API asks), or permission to edit that user.
+
+`woocommerce-delete-product` without `force` moves the product to the trash since 1.9.0; earlier versions deleted it for good (`wp_delete_post()` trashes only posts and pages).
+
 Input validation on creation/update:
 - Coupon type must be `percent`, `fixed_cart`, or `fixed_product`
 - Percentage coupons cannot exceed 100%
-- Order status values are restricted to valid WooCommerce states
-- Date filter values are validated before querying
+- Order status values are restricted to valid WooCommerce states (1.9.0: `completed` and `cancelled` work again; earlier versions refused them and accepted the misspelt `ompleted`, which WooCommerce turns into Pending payment)
+- Date filter values are validated before querying; `date_after` and `date_before` are whole days in site time, the day itself not included (`date_before` and `search` work since 1.9.0)
 
 ---
 

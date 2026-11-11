@@ -178,11 +178,13 @@ Trash or permanently delete a product.
 | `per_page` | integer | No | Max 100 (default: 20) |
 | `page` | integer | No | Page number (default: 1) |
 | `customer_id` | integer | No | Filter by customer user ID |
-| `date_after` | string | No | ISO8601 date — orders placed after this date |
-| `date_before` | string | No | ISO8601 date — orders placed before this date |
+| `date_after` | string | No | ISO8601 date — orders placed after this day (site time, the day itself not included) |
+| `date_before` | string | No | ISO8601 date — orders placed before this day (site time, the day itself not included) |
 | `search` | string | No | Search by order number, billing name or email |
 
 **Returns:** `{ orders: [{ id, number, status, date_created, total, currency, customer_id, billing_email, billing_name, items_count, payment_method }] }`
+
+Orders the account may not read (`read_shop_order` on the order, or `manage_woocommerce`) are left out; `get-order`, `update-order-status` and `add-order-note` answer "Order not found." for them (1.9.0).
 
 ---
 

@@ -2,6 +2,7 @@
 namespace MCP_Abilities\Abilities;
 
 use MCP_Abilities\Ability;
+use VGC\AI_Nexus_Woo\Access;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -21,20 +22,24 @@ class List_Orders_Ability extends Ability {
                 'per_page'  => [ 'type' => 'integer', 'default' => 20 ],
                 'page'      => [ 'type' => 'integer', 'default' => 1 ],
                 'customer_id' => [ 'type' => 'integer', 'description' => 'Filter by customer user ID.' ],
-                'date_after'  => [ 'type' => 'string',  'description' => 'ISO8601 date. Orders placed after this date.' ],
-                'date_before' => [ 'type' => 'string',  'description' => 'ISO8601 date. Orders placed before this date.' ],
+                'date_after'  => [ 'type' => 'string',  'description' => 'ISO8601 date. Orders placed after this day (site time; the day itself is not included).' ],
+                'date_before' => [ 'type' => 'string',  'description' => 'ISO8601 date. Orders placed before this day (site time; the day itself is not included).' ],
                 'search'    => [ 'type' => 'string',  'description' => 'Search by order number, billing name or email.' ],
             ],
         ];
     }
 
     public function execute( array $params ): array {
-        $status = sanitize_text_field( $params['status'] ?? 'any' );
+        $status   = mcp_woo_order_status_slug( sanitize_key( (string) ( $params['status'] ?? 'any' ) ) );
+        $statuses = array_keys( wc_get_order_statuses() );
+        if ( '' !== $status && 'any' !== $status && ! in_array( 'wc-' . $status, $statuses, true ) ) {
+            return $this->error( "Invalid status '{$status}'. Valid options: any, " . implode( ', ', array_map( 'mcp_woo_order_status_slug', $statuses ) ) . '.' );
+        }
 
         $args = [
             'limit'    => min( absint( $params['per_page'] ?? 20 ), 100 ),
             'page'     => max( 1, absint( $params['page'] ?? 1 ) ),
-            'status'   => $status === 'any' ? array_keys( wc_get_order_statuses() ) : [ 'wc-' . ltrim( $status, 'wc-' ) ],
+            'status'   => ( '' === $status || 'any' === $status ) ? $statuses : [ 'wc-' . $status ],
             'orderby'  => 'date',
             'order'    => 'DESC',
             'return'   => 'objects',
@@ -43,15 +48,47 @@ class List_Orders_Ability extends Ability {
         if ( ! empty( $params['customer_id'] ) ) {
             $args['customer_id'] = absint( $params['customer_id'] );
         }
-        if ( ! empty( $params['date_after'] ) ) {
-            $date = sanitize_text_field( $params['date_after'] );
-            if ( false === strtotime( $date ) ) {
-                return $this->error( "Invalid date_after value '{$date}'. Use ISO8601 format, e.g. 2024-01-15 or 2024-01-15T00:00:00." );
+
+        // Dates are whole days in site time, both ends left out (WooCommerce's ">" and "<").
+        // With both, the same range is written as the days in between, inclusive.
+        $days = [];
+        foreach ( [ 'date_after' => 1, 'date_before' => -1 ] as $name => $shift ) {
+            if ( empty( $params[ $name ] ) ) {
+                continue;
             }
-            $args['date_created'] = '>' . $date;
+            $date = sanitize_text_field( (string) $params[ $name ] );
+            if ( false === strtotime( $date ) ) {
+                return $this->error( "Invalid {$name} value '{$date}'. Use ISO8601 format, e.g. 2024-01-15 or 2024-01-15T00:00:00." );
+            }
+            $days[ $name ] = [ wc_string_to_datetime( $date ), $shift ];
+        }
+        if ( 2 === count( $days ) ) {
+            $range = array_map( static function ( array $d ): string {
+                return $d[0]->modify( sprintf( '%+d day', $d[1] ) )->date( 'Y-m-d' );
+            }, $days );
+            $args['date_created'] = $range['date_after'] . '...' . $range['date_before'];
+        } elseif ( isset( $days['date_after'] ) ) {
+            $args['date_created'] = '>' . $days['date_after'][0]->date( 'Y-m-d' );
+        } elseif ( isset( $days['date_before'] ) ) {
+            $args['date_created'] = '<' . $days['date_before'][0]->date( 'Y-m-d' );
         }
 
-        $orders = wc_get_orders( $args );
+        // Search the way WooCommerce's REST API does: HPOS searches in the query,
+        // the posts storage through wc_order_search().
+        $search = trim( sanitize_text_field( (string) ( $params['search'] ?? '' ) ) );
+        if ( '' !== $search ) {
+            $hpos = class_exists( '\Automattic\WooCommerce\Utilities\OrderUtil' )
+                && \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
+            if ( $hpos ) {
+                $args['s'] = $search;
+            } else {
+                $ids              = array_map( 'absint', (array) wc_order_search( $search ) );
+                $args['post__in'] = array_merge( $ids, [ 0 ] );
+            }
+        }
+
+        // Orders this account may not read are left out (1.9.0).
+        $orders = Access::readable_orders( (array) wc_get_orders( $args ) );
         $result = array_map( fn( $o ) => [
             'id'             => $o->get_id(),
             'number'         => $o->get_order_number(),
@@ -89,7 +126,7 @@ class Get_Order_Ability extends Ability {
     }
 
     public function execute( array $params ): array {
-        $order = wc_get_order( absint( $params['id'] ) );
+        $order = Access::readable_order( absint( $params['id'] ) );
         if ( ! $order ) {
             return $this->error( 'Order not found.' );
         }
@@ -164,14 +201,16 @@ class Update_Order_Status_Ability extends Ability {
     }
 
     public function execute( array $params ): array {
-        $order = wc_get_order( absint( $params['id'] ) );
+        $order = Access::readable_order( absint( $params['id'] ) );
         if ( ! $order ) {
             return $this->error( 'Order not found.' );
         }
+        if ( ! Access::can_order( $order, 'edit' ) ) {
+            return $this->error( 'You do not have permission to edit this order.' );
+        }
 
-        $new_status = sanitize_key( $params['status'] );
-        $valid      = array_keys( wc_get_order_statuses() );
-        $valid      = array_map( fn( $s ) => ltrim( $s, 'wc-' ), $valid );
+        $new_status = mcp_woo_order_status_slug( sanitize_key( $params['status'] ) );
+        $valid      = array_map( 'mcp_woo_order_status_slug', array_keys( wc_get_order_statuses() ) );
 
         if ( ! in_array( $new_status, $valid, true ) ) {
             return $this->error( "Invalid status. Valid options: " . implode( ', ', $valid ) );
@@ -205,9 +244,12 @@ class Add_Order_Note_Ability extends Ability {
     }
 
     public function execute( array $params ): array {
-        $order = wc_get_order( absint( $params['id'] ) );
+        $order = Access::readable_order( absint( $params['id'] ) );
         if ( ! $order ) {
             return $this->error( 'Order not found.' );
+        }
+        if ( ! Access::can_order( $order, 'edit' ) ) {
+            return $this->error( 'You do not have permission to edit this order.' );
         }
 
         $note_id = $order->add_order_note(

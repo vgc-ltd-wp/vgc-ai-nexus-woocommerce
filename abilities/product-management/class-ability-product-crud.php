@@ -2,6 +2,7 @@
 namespace MCP_Abilities\Abilities;
 
 use MCP_Abilities\Ability;
+use VGC\AI_Nexus_Woo\Access;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -90,14 +91,28 @@ class List_Products_Ability extends Ability {
             $args['meta_query'] = $meta_query;
         }
 
+        // Only what this account may read: other authors' unpublished products need the
+        // permission to edit others' products (1.9.0).
+        $scope = Access::scope_list_query( $args );
+        if ( null !== $scope['error'] ) {
+            return $this->error( $scope['error'] );
+        }
+
         $query    = new \WP_Query( $args );
         $products = [];
         foreach ( $query->posts as $post ) {
-            $product    = wc_get_product( $post->ID );
+            $product = wc_get_product( $post->ID );
+            if ( ! $product || ! Access::can_read_product( $product ) ) {
+                continue;
+            }
             $products[] = $this->format_product( $product );
         }
 
-        return $this->json_result( [ 'products' => $products, 'total' => $query->found_posts ] );
+        $out = [ 'products' => $products, 'total' => $query->found_posts ];
+        if ( null !== $scope['note'] ) {
+            $out['note'] = $scope['note'];
+        }
+        return $this->json_result( $out );
     }
 
     private function format_product( \WC_Product $p ): array {
@@ -137,7 +152,7 @@ class Get_Product_Ability extends Ability {
 
     public function execute( array $params ): array {
         $product = wc_get_product( absint( $params['id'] ) );
-        if ( ! $product ) {
+        if ( ! $product || ! Access::can_read_product( $product ) ) {
             return $this->error( 'Product not found.' );
         }
 
@@ -310,8 +325,11 @@ class Update_Product_Ability extends Ability {
 
     public function execute( array $params ): array {
         $product = wc_get_product( absint( $params['id'] ) );
-        if ( ! $product ) {
+        if ( ! $product || ! Access::can_read_product( $product ) ) {
             return $this->error( 'Product not found.' );
+        }
+        if ( ! Access::can_edit_product( $product ) ) {
+            return $this->error( 'You do not have permission to edit this product.' );
         }
 
         if ( isset( $params['name'] ) )   $product->set_name( sanitize_text_field( $params['name'] ) );
@@ -320,6 +338,10 @@ class Update_Product_Ability extends Ability {
             $allowed    = [ 'publish', 'draft', 'private', 'pending', 'trash' ];
             if ( ! in_array( $new_status, $allowed, true ) ) {
                 return $this->error( 'Invalid status. Allowed: ' . implode( ', ', $allowed ) . '.' );
+            }
+            $status_error = Access::product_status_error( $product, $new_status );
+            if ( null !== $status_error ) {
+                return $this->error( $status_error );
             }
             $product->set_status( $new_status );
         }
@@ -366,18 +388,24 @@ class Delete_Product_Ability extends Ability {
 
     public function execute( array $params ): array {
         $product = wc_get_product( absint( $params['id'] ) );
-        if ( ! $product ) {
+        if ( ! $product || ! Access::can_read_product( $product ) ) {
             return $this->error( 'Product not found.' );
+        }
+        if ( ! Access::can_delete_product( $product ) ) {
+            return $this->error( 'You do not have permission to delete this product.' );
         }
 
         $force = ! empty( $params['force'] );
-        $result = wp_delete_post( $product->get_id(), $force );
+        $id    = $product->get_id();
+        // WooCommerce's own delete: wp_delete_post() trashes only posts and pages, so it
+        // deleted a product for good even without force (1.9.0).
+        $result = $product->delete( $force );
 
         if ( ! $result ) {
             return $this->error( 'Failed to delete product.' );
         }
 
         $action = $force ? 'permanently deleted' : 'moved to trash';
-        return $this->success( "Product {$product->get_id()} {$action}." );
+        return $this->success( "Product {$id} {$action}." );
     }
 }

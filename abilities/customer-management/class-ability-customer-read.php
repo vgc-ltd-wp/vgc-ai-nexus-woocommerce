@@ -2,6 +2,7 @@
 namespace MCP_Abilities\Abilities;
 
 use MCP_Abilities\Ability;
+use VGC\AI_Nexus_Woo\Access;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -24,15 +25,22 @@ class Get_Customer_Ability extends Ability {
     }
 
     public function execute( array $params ): array {
+        // A user this account may not read answers like a missing one (1.9.0).
         if ( ! empty( $params['id'] ) ) {
+            if ( ! Access::can_read_customer( absint( $params['id'] ) ) ) {
+                return $this->error( 'Customer not found.' );
+            }
             try {
                 $customer = new \WC_Customer( absint( $params['id'] ) );
             } catch ( \Exception $e ) {
                 return $this->error( 'Customer not found.' );
             }
+            if ( ! $customer->get_id() ) {
+                return $this->error( 'Customer not found.' ); // WooCommerce gives an empty customer for an unknown ID
+            }
         } elseif ( ! empty( $params['email'] ) ) {
             $user = get_user_by( 'email', sanitize_email( $params['email'] ) );
-            if ( ! $user ) {
+            if ( ! $user || ! Access::can_read_customer( (int) $user->ID ) ) {
                 return $this->error( 'User with this email not found.' );
             }
             $customer = new \WC_Customer( $user->ID );
@@ -92,12 +100,13 @@ class List_Customer_Orders_Ability extends Ability {
     }
 
     public function execute( array $params ): array {
-        $orders = wc_get_orders( [
+        // Orders this account may not read are left out (1.9.0).
+        $orders = Access::readable_orders( (array) wc_get_orders( [
             'customer_id' => absint( $params['id'] ),
             'limit'       => min( absint( $params['per_page'] ?? 10 ), 50 ),
             'orderby'     => 'date',
             'order'       => 'DESC',
-        ] );
+        ] ) );
 
         $result = array_map( fn( $o ) => [
             'id'           => $o->get_id(),

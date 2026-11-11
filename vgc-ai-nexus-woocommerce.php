@@ -3,7 +3,7 @@
  * Plugin Name:       VGC AI Nexus for WooCommerce
  * Plugin URI:        https://tools.vgc-ltd.com
  * Description:       Extends VGC AI Nexus with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP. Requires VGC AI Nexus and WooCommerce.
- * Version:           1.8.1
+ * Version:           1.9.0
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            VGC
@@ -16,8 +16,9 @@
 defined( 'ABSPATH' ) || exit;
 
 /* VGC self-hosted updates: shows the native WordPress "Update now" button (no token; manifest is public). */
-define( 'MCP_WOO_VERSION', '1.8.1' );
+define( 'MCP_WOO_VERSION', '1.9.0' );
 require_once __DIR__ . '/includes/class-vgc-plugin-updater.php';
+require_once __DIR__ . '/includes/class-woo-access.php';
 new \VGC_Plugin_Updater( __FILE__, 'vgc-ai-nexus-woocommerce', MCP_WOO_VERSION, 'https://raw.githubusercontent.com/vgc-ltd-wp/vgc-plugin-updates/main/plugins.json' );
 
 
@@ -236,6 +237,14 @@ function mcp_woo_ability_slug( string $key ): string {
 }
 
 /**
+ * An order status without its "wc-" prefix: "wc-completed" → "completed". Removes the
+ * prefix only; ltrim( $s, 'wc-' ) also ate the leading c of "completed" and "cancelled".
+ */
+function mcp_woo_order_status_slug( string $status ): string {
+    return 0 === strpos( $status, 'wc-' ) ? substr( $status, 3 ) : $status;
+}
+
+/**
  * Build an McpTool instance for direct injection into the server config.
  *
  * McpNameSanitizer replaces '/' with '-', so we pre-sanitize the name.
@@ -308,6 +317,9 @@ Anti-patterns:
   term slugs.
 - Variations belong to a parent product. Read the parent with wc_get_product
   before changing a variation.
+- Each product, order, coupon and customer is checked against the account's
+  own permissions. One this account may not read answers "not found" and is
+  left out of lists; it may exist for other accounts.
 MD;
     $sections['woocommerce'] = [ 'title' => 'WooCommerce extension', 'body' => $body ];
     return $sections;

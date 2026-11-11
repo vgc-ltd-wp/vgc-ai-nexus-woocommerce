@@ -2,6 +2,7 @@
 namespace MCP_Abilities\Abilities;
 
 use MCP_Abilities\Ability;
+use VGC\AI_Nexus_Woo\Access;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -30,10 +31,17 @@ class List_Coupons_Ability extends Ability {
             'posts_per_page' => min( absint( $params['per_page'] ?? 20 ), 100 ),
         ];
         if ( ! empty( $params['search'] ) ) $args['s'] = sanitize_text_field( $params['search'] );
+        $pto = get_post_type_object( 'shop_coupon' );
+        if ( $pto && ! current_user_can( $pto->cap->edit_others_posts ) ) {
+            $args['author'] = get_current_user_id(); // only their own coupons are editable to them
+        }
 
         $query   = new \WP_Query( $args );
         $coupons = [];
         foreach ( $query->posts as $post ) {
+            if ( ! Access::can_read_coupon( (int) $post->ID ) ) {
+                continue; // Coupons this account may not edit are left out (1.9.0).
+            }
             $coupon    = new \WC_Coupon( $post->ID );
             $coupons[] = [
                 'id'              => $coupon->get_id(),
