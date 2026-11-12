@@ -2,7 +2,7 @@
 
 Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP.
 
-**Version 1.9.0.**
+**Version 1.9.1.**
 
 ---
 
@@ -90,6 +90,9 @@ All tools enforce WooCommerce's own capability system:
 - Orders: `read_shop_order` / `edit_shop_order` on that order, or `manage_woocommerce` (WooCommerce's rule for its order screen, also with HPOS).
 - Coupons: listed only when the caller may edit that coupon.
 - Customers: `list_users` (what WooCommerce's REST API asks), or permission to edit that user.
+
+- **Read-only mode and the input schema inside every call (1.9.1).** With AI Nexus's tool consolidation off, this extension registers each ability and MCP tool itself. Both now refuse a write in read-only mode and check the call against the tool's schema (types, required fields) right before running, as AI Nexus core's own tools do, also when nothing checked permission first. With consolidation on, core's group tool does both, as before.
+- **Updates come only from the VGC update channel (1.9.1).** With AI Nexus 2.37.0 or later active, this extension uses core's updater: a package from another address, or one whose sha256 does not match the channel's manifest, is refused, and only an administrator's "Check again" on the Updates or Plugins screen skips the cached manifest. Without AI Nexus, or with an older one, the bundled updater works as before.
 
 `woocommerce-delete-product` without `force` moves the product to the trash since 1.9.0; earlier versions deleted it for good (`wp_delete_post()` trashes only posts and pages).
 

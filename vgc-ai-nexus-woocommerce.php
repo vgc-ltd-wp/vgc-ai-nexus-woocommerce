@@ -3,7 +3,7 @@
  * Plugin Name:       VGC AI Nexus for WooCommerce
  * Plugin URI:        https://tools.vgc-ltd.com
  * Description:       Extends VGC AI Nexus with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP. Requires VGC AI Nexus and WooCommerce.
- * Version:           1.9.0
+ * Version:           1.9.1
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            VGC
@@ -16,10 +16,19 @@
 defined( 'ABSPATH' ) || exit;
 
 /* VGC self-hosted updates: shows the native WordPress "Update now" button (no token; manifest is public). */
-define( 'MCP_WOO_VERSION', '1.9.0' );
-require_once __DIR__ . '/includes/class-vgc-plugin-updater.php';
+define( 'MCP_WOO_VERSION', '1.9.1' );
+require_once __DIR__ . '/includes/class-vgc-plugin-updater.php'; // fallback when core is missing or older than 2.37
 require_once __DIR__ . '/includes/class-woo-access.php';
-new \VGC_Plugin_Updater( __FILE__, 'vgc-ai-nexus-woocommerce', MCP_WOO_VERSION, 'https://raw.githubusercontent.com/vgc-ltd-wp/vgc-plugin-updates/main/plugins.json' );
+// AI Nexus core's updater (2.37.0+) takes a package only from the update channel and
+// checks its sha256. This plugin loads before core, so it is made once all plugins are in.
+add_action( 'plugins_loaded', static function (): void {
+    $args = [ __FILE__, 'vgc-ai-nexus-woocommerce', MCP_WOO_VERSION, 'https://raw.githubusercontent.com/vgc-ltd-wp/vgc-plugin-updates/main/plugins.json' ];
+    if ( class_exists( '\MCP_Abilities\Package_Guard' ) && class_exists( '\MCP_Abilities\VGC_Plugin_Updater' ) ) {
+        new \MCP_Abilities\VGC_Plugin_Updater( ...$args );
+    } else {
+        new \VGC_Plugin_Updater( ...$args );
+    }
+}, 1 );
 
 
 define( 'MCP_WOO_FILE',    __FILE__ );
@@ -111,7 +120,7 @@ add_action( 'mcp_abilities_loaded', function ( \MCP_Abilities\Plugin $core_plugi
                     return $ability->current_user_can();
                 },
                 'execute_callback'    => function ( $params = [] ) use ( $ability ) {
-                    return $ability->execute( (array) $params );
+                    return mcp_woo_run( $ability, (array) $params );
                 },
                 'meta' => [ 'mcp' => [ 'public' => true ] ],
             ] );
@@ -245,6 +254,36 @@ function mcp_woo_order_status_slug( string $status ): string {
 }
 
 /**
+ * Runs an ability for both the WordPress ability and the MCP tool (1.9.1).
+ *
+ * Core's own tools re-check read-only mode and the input schema just before
+ * running; these two callbacks call the ability directly, so they do the same.
+ * With tool consolidation on, each tool is core's dispatcher, which checks the
+ * chosen action itself.
+ *
+ * @param array<string,mixed> $params
+ * @return array<string,mixed>
+ */
+function mcp_woo_run( \MCP_Abilities\Ability $ability, array $params ): array {
+    if ( method_exists( $ability, 'blocked_by_read_only' ) && $ability->blocked_by_read_only() ) {
+        return [
+            'success' => false,
+            'error'   => class_exists( '\MCP_Abilities\Read_Only' )
+                ? \MCP_Abilities\Read_Only::error_message( $ability->get_key() )
+                : 'AI Nexus is in read-only mode on this site.',
+        ];
+    }
+    if ( ! $ability instanceof \MCP_Abilities\Crud_Ability && method_exists( $ability, 'validate_params' ) ) {
+        $checked = $ability->validate_params( $params );
+        if ( is_string( $checked ) ) {
+            return [ 'success' => false, 'error' => $checked ];
+        }
+        $params = $checked;
+    }
+    return $ability->execute( $params );
+}
+
+/**
  * Build an McpTool instance for direct injection into the server config.
  *
  * McpNameSanitizer replaces '/' with '-', so we pre-sanitize the name.
@@ -278,7 +317,7 @@ function mcp_woo_make_tool( \MCP_Abilities\Ability $ability ) {
         'description' => $ability->get_description(),
         'inputSchema' => $input_schema,
         'handler'     => function ( $params = [] ) use ( $ability ) {
-            return $ability->execute( (array) $params );
+            return mcp_woo_run( $ability, (array) $params );
         },
         'permission'  => function () use ( $ability ) {
             return $ability->current_user_can();
