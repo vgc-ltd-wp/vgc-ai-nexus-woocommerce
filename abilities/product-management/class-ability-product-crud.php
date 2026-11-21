@@ -13,15 +13,16 @@ class List_Products_Ability extends Ability {
     protected function define_meta(): void {
         $this->key          = 'wc_list_products';
         $this->label        = __( 'List Products', 'mcp-abilities-woo' );
-        $this->description  = 'List WooCommerce products with filtering by status, category, stock and price.';
+        $this->description  = 'List WooCommerce products with filtering by status, SKU, category, stock and price. "sku" finds products by their exact SKU (several: comma-separated); "search" matches the name and description and also part of a SKU.';
         $this->required_cap = 'edit_products';
         $this->input_schema = [
             'type'       => [ 'object', 'array' ],
             'properties' => [
-                'status'    => [ 'type' => 'string',  'enum' => [ 'publish', 'draft', 'private', 'pending', 'any' ], 'default' => 'publish' ],
+                'status'    => [ 'type' => 'string',  'enum' => self::ALLOWED_STATUSES, 'default' => 'publish', 'description' => '"any" is every status but trash; "trash" lists the products in the trash.' ],
                 'per_page'  => [ 'type' => 'integer', 'default' => 20 ],
                 'page'      => [ 'type' => 'integer', 'default' => 1 ],
-                'search'    => [ 'type' => 'string' ],
+                'sku'       => [ 'type' => 'string',  'description' => 'Exact SKU, or several separated by commas ("BM-01,BM-02"). A variation\'s SKU finds its parent product.' ],
+                'search'    => [ 'type' => 'string',  'description' => 'Words in the name or description, or part of a SKU.' ],
                 'category'  => [ 'type' => 'string',  'description' => 'Product category slug.' ],
                 'tag'       => [ 'type' => 'string',  'description' => 'Product tag slug.' ],
                 'stock'        => [ 'type' => 'string',  'enum' => [ 'instock', 'outofstock', 'onbackorder' ] ],
@@ -32,12 +33,14 @@ class List_Products_Ability extends Ability {
         ];
     }
 
-    private const ALLOWED_STATUSES = [ 'publish', 'draft', 'private', 'pending', 'any' ];
+    private const ALLOWED_STATUSES = [ 'publish', 'draft', 'private', 'pending', 'trash', 'any' ];
 
     public function execute( array $params ): array {
-        $status = sanitize_key( $params['status'] ?? 'publish' );
+        $status = sanitize_key( (string) ( $params['status'] ?? '' ) );
+        $status = '' === $status ? 'publish' : $status;
         if ( ! in_array( $status, self::ALLOWED_STATUSES, true ) ) {
-            $status = 'publish';
+            // Until 1.10.0 an unknown status quietly listed the published products instead.
+            return $this->error( sprintf( 'Unknown status "%s": use one of %s.', $status, implode( ', ', self::ALLOWED_STATUSES ) ) );
         }
 
         $args = [
@@ -47,8 +50,35 @@ class List_Products_Ability extends Ability {
             'paged'          => max( 1, absint( $params['page'] ?? 1 ) ),
         ];
 
-        if ( ! empty( $params['search'] ) ) {
-            $args['s'] = sanitize_text_field( $params['search'] );
+        // SKU (1.10.0): "sku" is an exact match, "search" also matches part of a SKU.
+        // Both look at the product's own SKU and its variations' SKUs.
+        $candidates = null;
+        $skus       = isset( $params['sku'] ) && is_scalar( $params['sku'] )
+            ? array_values( array_filter( array_map( 'trim', explode( ',', sanitize_text_field( (string) $params['sku'] ) ) ), 'strlen' ) )
+            : [];
+        if ( $skus ) {
+            $candidates = self::ids_by_sku( $skus, false );
+        }
+        if ( isset( $params['search'] ) && is_scalar( $params['search'] ) && '' !== trim( (string) $params['search'] ) ) {
+            $term     = sanitize_text_field( (string) $params['search'] );
+            $sku_hits = self::ids_by_sku( [ $term ], true );
+            if ( $sku_hits ) {
+                $text_hits  = get_posts( [
+                    'post_type'      => 'product',
+                    'post_status'    => $status,
+                    's'              => $term,
+                    'fields'         => 'ids',
+                    'posts_per_page' => -1,
+                    'no_found_rows'  => true,
+                ] );
+                $found      = array_values( array_unique( array_merge( array_map( 'intval', $text_hits ), $sku_hits ) ) );
+                $candidates = null === $candidates ? $found : array_values( array_intersect( $candidates, $found ) );
+            } else {
+                $args['s'] = $term;
+            }
+        }
+        if ( null !== $candidates ) {
+            $args['post__in'] = $candidates ? $candidates : [ 0 ];
         }
 
         $tax_query = [];
@@ -113,6 +143,30 @@ class List_Products_Ability extends Ability {
             $out['note'] = $scope['note'];
         }
         return $this->json_result( $out );
+    }
+
+    /**
+     * The products whose own SKU, or one of whose variations' SKU, is one of $skus
+     * ($partial false) or contains $skus[0] ($partial true). Any status: the list
+     * query's own filters and access checks decide the rest.
+     *
+     * @param string[] $skus
+     * @return int[]
+     */
+    private static function ids_by_sku( array $skus, bool $partial ): array {
+        global $wpdb;
+        if ( ! $skus ) {
+            return [];
+        }
+        $where = $partial
+            ? $wpdb->prepare( 'm.meta_value LIKE %s', '%' . $wpdb->esc_like( $skus[0] ) . '%' )
+            : $wpdb->prepare( 'm.meta_value IN (' . implode( ',', array_fill( 0, count( $skus ), '%s' ) ) . ')', $skus );
+        $ids = $wpdb->get_col(
+            "SELECT DISTINCT IF( p.post_type = 'product_variation', p.post_parent, p.ID )
+             FROM {$wpdb->postmeta} m INNER JOIN {$wpdb->posts} p ON p.ID = m.post_id
+             WHERE m.meta_key = '_sku' AND p.post_type IN ( 'product', 'product_variation' ) AND {$where}"
+        ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $where is prepared above.
+        return array_values( array_filter( array_map( 'intval', (array) $ids ) ) );
     }
 
     private function format_product( \WC_Product $p ): array {

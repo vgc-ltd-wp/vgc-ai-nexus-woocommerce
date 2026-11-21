@@ -11,14 +11,15 @@ List WooCommerce products with optional filters.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `status` | string | No | `publish`, `draft`, `private`, `pending`, `any` (default: `publish`) |
+| `status` | string | No | `publish`, `draft`, `private`, `pending`, `trash`, `any` (default: `publish`; `any` is every status but trash). Any other value is refused (1.10.0; before, it quietly listed the published products) |
+| `sku` | string | No | Exact SKU, or several separated by commas. A variation's SKU finds its parent product (1.10.0) |
 | `product_type` | string | No | `simple`, `grouped`, `external` |
 | `per_page` | integer | No | Max 100 (default: 20) |
 | `page` | integer | No | Page number (default: 1) |
 | `category_id` | integer | No | Filter by product category term ID |
 | `tag_id` | integer | No | Filter by product tag term ID |
 | `stock` | string | No | `instock`, `outofstock`, `onbackorder` |
-| `search` | string | No | Keyword search |
+| `search` | string | No | Words in the name or description, or part of a SKU (1.10.0) |
 
 **Returns:** `{ products: [...], total: N }`
 
