@@ -166,6 +166,11 @@ class List_Products_Ability extends Ability {
             if ( null !== $note ) {
                 $out['fields_note'] = $note;
             }
+        } elseif ( method_exists( '\MCP_Abilities\Query_Support', 'with_size_note' ) ) {
+            // 1.12.0 (AI Nexus 2.48.0+): a big list of whole products says in "note" how
+            // small the same list is with "fields". An AI may hold this tool's description
+            // from before 1.11.0 (a connector keeps the first one it saw), so the answer says it.
+            $out = \MCP_Abilities\Query_Support::with_size_note( $out, $products, [ 'id', 'name' ] );
         }
         return $this->json_result( $out );
     }

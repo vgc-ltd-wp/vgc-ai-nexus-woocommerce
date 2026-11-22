@@ -2,7 +2,7 @@
 
 Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP.
 
-**Version 1.11.0.**
+**Version 1.12.0.**
 
 ---
 
@@ -36,6 +36,8 @@ Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooC
 | `woocommerce-create-product` | Create a simple, grouped or external product |
 | `woocommerce-update-product` | Update product details, pricing, stock and status |
 | `woocommerce-delete-product` | Trash or permanently delete a product |
+
+**A big product list says how to get a small one (1.12.0).** With VGC AI Nexus 2.48.0 or later, a list of whole products (no `fields`) of 10,000 characters or more has one line in `note`: its size, and the size of the same list with `"fields": ["id", "name"]`, worked out from the products themselves. For 100 products on the test site: 29,068 characters, against 5,688 with `["id", "name"]`. An AI may hold this tool's description from before 1.11.0 (a claude.ai connector keeps the first one it saw) and not know `fields` exists; the answer tells it. The products are unchanged, and lists under 10,000 characters (the default 20 products) get no note. Where the answer already has a `note` (a list limited to the products the account may see), this line follows it.
 
 **Smaller product lists (1.11.0).** `fields` names the fields to return (`["id", "name", "sku"]`); each product then has `id` plus only those. For 100 products, `["id", "name", "sku"]` is 7,718 characters instead of 29,019 (3.8 times smaller), and the address of each product is worked out only when `permalink` is named. Names that are not product fields are left out and said in `fields_note`, which also lists the fields that can be named. Without `fields` the answer is unchanged. It uses VGC AI Nexus 2.47.0's list helpers; with an older core the products stay whole and `fields_note` says why.
 

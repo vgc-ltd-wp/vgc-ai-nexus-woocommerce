@@ -22,7 +22,7 @@ List WooCommerce products with optional filters.
 | `search` | string | No | Words in the name or description, or part of a SKU (1.10.0) |
 | `fields` | array | No | Only these fields of each product, plus `id`: `id`, `name`, `sku`, `type`, `status`, `price`, `regular_price`, `sale_price`, `stock_status`, `stock_qty`, `permalink`. An unknown name is left out and said in `fields_note`; with no known name the products are whole. Needs VGC AI Nexus 2.47.0 or later (1.11.0) |
 
-**Returns:** `{ products: [...], total: N }`, plus `fields_note` when a name in `fields` did nothing. Without `fields` the answer is the same as before 1.11.0.
+**Returns:** `{ products: [...], total: N }`, plus `fields_note` when a name in `fields` did nothing, and `note` when the list is limited to the products the account may see. Without `fields` the products are the same as before 1.11.0; since 1.12.0 (with VGC AI Nexus 2.48.0 or later) a list of 10,000 characters or more also has one line in `note` with its size and the size of the same list with `"fields": ["id", "name"]`.
 
 ---
 
