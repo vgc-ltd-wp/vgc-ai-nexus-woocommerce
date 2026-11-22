@@ -2,7 +2,7 @@
 
 Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP.
 
-**Version 1.12.0.**
+**Version 1.13.0.**
 
 ---
 
@@ -36,6 +36,10 @@ Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooC
 | `woocommerce-create-product` | Create a simple, grouped or external product |
 | `woocommerce-update-product` | Update product details, pricing, stock and status |
 | `woocommerce-delete-product` | Trash or permanently delete a product |
+
+**An administrator's product description keeps its CSS, script and form fields (1.13.0).** `woocommerce-create-product` and `woocommerce-update-product` store `description` and `short_description` as sent for an account that may post unfiltered HTML, the rule VGC AI Nexus 2.49.0 uses for pages and posts. For anyone else (a shop manager has no `unfiltered_html` by default), or while raw code is locked on the site (`MCP_ABILITIES_DISABLE_CUSTOM_CODE` or the `mcp_abilities_custom_code_enabled` filter), script and other markup WordPress does not allow in posts is removed and the answer has a `note` saying so. 1.12.0 filtered every account. With AI Nexus 2.41.0-2.48.x the same rule applies without the note; with an older core every account is filtered, as before. Read-only mode still refuses both tools.
+
+**Backslashes are kept (1.13.0).** WooCommerce's product data store hands the name, description and short description to WordPress unslashed, so every backslash was lost (`/\d+/` became `/d+/`, `C:\Temp` became `C:Temp`), also from a description the call did not touch when only the name or status changed. The two tools now save them slashed, as WooCommerce's own REST API does; a variation's description (kept in meta) too.
 
 **A big product list says how to get a small one (1.12.0).** With VGC AI Nexus 2.48.0 or later, a list of whole products (no `fields`) of 10,000 characters or more has one line in `note`: its size, and the size of the same list with `"fields": ["id", "name"]`, worked out from the products themselves. For 100 products on the test site: 29,068 characters, against 5,688 with `["id", "name"]`. An AI may hold this tool's description from before 1.11.0 (a claude.ai connector keeps the first one it saw) and not know `fields` exists; the answer tells it. The products are unchanged, and lists under 10,000 characters (the default 20 products) get no note. Where the answer already has a `note` (a list limited to the products the account may see), this line follows it.
 

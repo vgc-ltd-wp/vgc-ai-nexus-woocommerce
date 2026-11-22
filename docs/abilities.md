@@ -59,7 +59,9 @@ Create a new WooCommerce product.
 
 > Note: `variable` products cannot be created via this tool — use the WooCommerce admin to create variable products and manage their variations.
 
-**Returns:** `{ id: N }`
+**Returns:** `{ id, permalink, edit_url }`, plus `note` when markup was removed from a description (1.13.0).
+
+**Descriptions (1.13.0).** `description` and `short_description` are stored as sent (style, script and form fields included) for an account that may post unfiltered HTML, such as an administrator, the rule VGC AI Nexus 2.49.0 uses for pages and posts. For anyone else (a shop manager has no `unfiltered_html` by default), or while raw code is locked on the site (`MCP_ABILITIES_DISABLE_CUSTOM_CODE` or the `mcp_abilities_custom_code_enabled` filter), script and other markup WordPress does not allow in posts is removed and `note` says so. The name, description and short description keep their backslashes.
 
 ---
 
@@ -82,7 +84,7 @@ Update an existing product.
 | `category_ids` | array | No | Replace category assignments |
 | `tag_ids` | array | No | Replace tag assignments |
 
-**Returns:** `{ id: N }`
+**Returns:** `{ message }`, plus `note` when markup was removed from a description (1.13.0). Descriptions follow the same rule as in `woocommerce-create-product`. A change to the name or status alone no longer takes the backslashes out of the description, short description and name (1.12.0 and earlier: WooCommerce rewrites the whole post then, unslashed).
 
 ---
 

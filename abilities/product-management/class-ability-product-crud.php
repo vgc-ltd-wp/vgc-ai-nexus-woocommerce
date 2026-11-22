@@ -323,9 +323,102 @@ class Get_Product_Ability extends Ability {
     }
 }
 
+// ── Product text (1.13.0) ─────────────────────────────────────────────────────
+
+/**
+ * How create_product and update_product store a product's description, short
+ * description and name.
+ */
+trait Woo_Product_Text {
+
+    /**
+     * Description markup as it may be stored, and the note to give when filtering took
+     * something out. Core's rule for post and page content (AI Nexus 2.49.0): as sent for
+     * an account that may post unfiltered HTML, unless raw code is locked on the site;
+     * otherwise filtered as WordPress filters posts. On core 2.41.0-2.48.x the same rule
+     * without a note; on an older core every account is filtered, as before (1.12.0
+     * filtered every account).
+     *
+     * @return array{0:string,1:?string} [ markup to store, note or null ]
+     */
+    protected static function filter_text( string $html ): array {
+        if ( class_exists( '\MCP_Abilities\Custom_Code' ) && method_exists( '\MCP_Abilities\Custom_Code', 'filter_with_note' ) ) {
+            return \MCP_Abilities\Custom_Code::filter_with_note( $html );
+        }
+        if ( class_exists( '\MCP_Abilities\Custom_Code' ) && method_exists( '\MCP_Abilities\Custom_Code', 'filter_markup' ) ) {
+            return [ \MCP_Abilities\Custom_Code::filter_markup( $html ), null ];
+        }
+        return [ wp_kses_post( $html ), null ];
+    }
+
+    /** How the description is stored; appended to the "description" input (1.13.0). */
+    protected static function text_rule_description(): string {
+        if ( ! class_exists( '\MCP_Abilities\Custom_Code' ) || ! method_exists( '\MCP_Abilities\Custom_Code', 'filter_markup' ) ) {
+            return '';
+        }
+        return ' Stored as sent (style, script and form fields included) for an account that may post unfiltered HTML, such as an administrator; otherwise, or while raw code is locked on the site, script and other markup WordPress does not allow in posts is removed'
+            . ( method_exists( '\MCP_Abilities\Custom_Code', 'filter_with_note' ) ? ', and the result has a "note" saying so.' : '.' );
+    }
+
+    /**
+     * Save the product so that its name, description, short description and password
+     * keep their backslashes (1.13.0).
+     *
+     * WooCommerce's product data store hands them to wp_insert_post() / wp_update_post()
+     * as they are, and those unslash: every backslash was lost (/\d+/ became /d+/), also
+     * from a description the call did not touch when the name or status changed, since
+     * that rewrites the whole post row. A variation's description is meta, written with
+     * update_post_meta(), which unslashes too. WooCommerce's own REST API sets these
+     * slashed; this does the same for this one save and puts the plain text back on the
+     * object after. Saved as they are: a product of another data store, a save that writes
+     * none of them, and a product saved inside save_post (WooCommerce then writes the row
+     * with $wpdb, which does not unslash).
+     */
+    protected static function save_product( \WC_Product $product ): int {
+        $store   = $product->get_data_store();
+        $class   = is_object( $store ) && method_exists( $store, 'get_current_class_name' ) ? (string) $store->get_current_class_name() : '';
+        $changes = array_keys( $product->get_changes() );
+        $slash   = [];
+        if ( is_a( $class, 'WC_Product_Variation_Data_Store_CPT', true ) ) {
+            if ( ! $product->get_id() || in_array( 'description', $changes, true ) ) {
+                $slash = [ 'description' ];
+            }
+        } elseif ( is_a( $class, 'WC_Product_Data_Store_CPT', true ) && ! doing_action( 'save_post' ) ) {
+            // The props that make WooCommerce rewrite the post row (its update()).
+            $row = [ 'description', 'short_description', 'name', 'parent_id', 'reviews_allowed', 'status', 'menu_order', 'date_created', 'date_modified', 'slug', 'post_password' ];
+            if ( ! $product->get_id() || array_intersect( $row, $changes ) ) {
+                $slash = [ 'name', 'description', 'short_description', 'post_password' ];
+            }
+        }
+        if ( ! $slash ) {
+            return (int) $product->save();
+        }
+
+        $plain = [];
+        foreach ( $slash as $prop ) {
+            if ( method_exists( $product, 'get_' . $prop ) && method_exists( $product, 'set_' . $prop ) ) {
+                $plain[ $prop ] = (string) $product->{'get_' . $prop}( 'edit' );
+            }
+        }
+        foreach ( $plain as $prop => $value ) {
+            $product->{'set_' . $prop}( wp_slash( $value ) );
+        }
+        try {
+            $id = (int) $product->save();
+        } finally {
+            foreach ( $plain as $prop => $value ) {
+                $product->{'set_' . $prop}( $value );
+            }
+            $product->apply_changes();
+        }
+        return $id;
+    }
+}
+
 // ── Create Product ────────────────────────────────────────────────────────────
 
 class Create_Product_Ability extends Ability {
+    use Woo_Product_Text;
 
     private const ALLOWED_TYPES        = [ 'simple', 'grouped', 'external' ];
     private const ALLOWED_STATUSES     = [ 'publish', 'draft', 'private', 'pending' ];
@@ -345,8 +438,8 @@ class Create_Product_Ability extends Ability {
                 'sku'               => [ 'type' => 'string' ],
                 'regular_price'     => [ 'type' => 'string',  'description' => 'Regular price (numeric string, e.g. "19.99").' ],
                 'sale_price'        => [ 'type' => 'string' ],
-                'description'       => [ 'type' => 'string' ],
-                'short_description' => [ 'type' => 'string' ],
+                'description'       => [ 'type' => 'string', 'description' => 'Product description (HTML).' . self::text_rule_description() ],
+                'short_description' => [ 'type' => 'string', 'description' => 'Short description (HTML), stored the same way as the description.' ],
                 'categories'        => [ 'type' => 'array', 'items' => [ 'type' => 'integer' ], 'description' => 'Array of category term IDs.' ],
                 'tags'              => [ 'type' => 'array', 'items' => [ 'type' => 'integer' ], 'description' => 'Array of tag term IDs.' ],
                 'manage_stock'      => [ 'type' => 'boolean', 'default' => false ],
@@ -381,8 +474,16 @@ class Create_Product_Ability extends Ability {
         if ( ! empty( $params['sku'] ) )               $product->set_sku( sanitize_text_field( $params['sku'] ) );
         if ( isset( $params['regular_price'] ) )        $product->set_regular_price( wc_format_decimal( $params['regular_price'] ) );
         if ( isset( $params['sale_price'] ) )           $product->set_sale_price( wc_format_decimal( $params['sale_price'] ) );
-        if ( ! empty( $params['description'] ) )        $product->set_description( wp_kses_post( $params['description'] ) );
-        if ( ! empty( $params['short_description'] ) )  $product->set_short_description( wp_kses_post( $params['short_description'] ) );
+        // Description and short description follow core's rule for post content (1.13.0):
+        // as sent for an account that may post unfiltered HTML, unless raw code is locked;
+        // otherwise filtered as WordPress filters posts, with a note.
+        $notes = [];
+        foreach ( [ 'description', 'short_description' ] as $field ) {
+            if ( ! empty( $params[ $field ] ) ) {
+                [ $html, $notes[] ] = self::filter_text( (string) $params[ $field ] );
+                $product->{'set_' . $field}( $html );
+            }
+        }
         if ( isset( $params['manage_stock'] ) )         $product->set_manage_stock( (bool) $params['manage_stock'] );
         if ( isset( $params['stock_qty'] ) )            $product->set_stock_quantity( absint( $params['stock_qty'] ) );
         if ( ! empty( $params['stock_status'] ) ) {
@@ -392,7 +493,8 @@ class Create_Product_Ability extends Ability {
             }
         }
 
-        $id = $product->save();
+        $id   = self::save_product( $product );
+        $note = current( array_filter( $notes ) );
 
         if ( ! empty( $params['categories'] ) ) {
             wp_set_post_terms( $id, array_map( 'absint', (array) $params['categories'] ), 'product_cat' );
@@ -401,17 +503,18 @@ class Create_Product_Ability extends Ability {
             wp_set_post_terms( $id, array_map( 'absint', (array) $params['tags'] ), 'product_tag' );
         }
 
-        return $this->json_result( [
+        return $this->json_result( array_merge( [
             'id'        => $id,
             'permalink' => get_permalink( $id ),
             'edit_url'  => get_edit_post_link( $id, 'raw' ),
-        ] );
+        ], false !== $note ? [ 'note' => $note ] : [] ) );
     }
 }
 
 // ── Update Product ────────────────────────────────────────────────────────────
 
 class Update_Product_Ability extends Ability {
+    use Woo_Product_Text;
 
     protected function define_meta(): void {
         $this->key          = 'wc_update_product';
@@ -427,8 +530,8 @@ class Update_Product_Ability extends Ability {
                 'sku'               => [ 'type' => 'string' ],
                 'regular_price'     => [ 'type' => 'string' ],
                 'sale_price'        => [ 'type' => 'string' ],
-                'description'       => [ 'type' => 'string' ],
-                'short_description' => [ 'type' => 'string' ],
+                'description'       => [ 'type' => 'string', 'description' => 'New description (HTML).' . self::text_rule_description() ],
+                'short_description' => [ 'type' => 'string', 'description' => 'New short description (HTML), stored the same way as the description.' ],
                 'manage_stock'      => [ 'type' => 'boolean' ],
                 'stock_qty'         => [ 'type' => 'integer' ],
                 'stock_status'      => [ 'type' => 'string',  'description' => 'instock | outofstock | onbackorder' ],
@@ -464,13 +567,21 @@ class Update_Product_Ability extends Ability {
         if ( isset( $params['sku'] ) )               $product->set_sku( sanitize_text_field( $params['sku'] ) );
         if ( isset( $params['regular_price'] ) )     $product->set_regular_price( wc_format_decimal( $params['regular_price'] ) );
         if ( isset( $params['sale_price'] ) )        $product->set_sale_price( wc_format_decimal( $params['sale_price'] ) );
-        if ( isset( $params['description'] ) )       $product->set_description( wp_kses_post( $params['description'] ) );
-        if ( isset( $params['short_description'] ) ) $product->set_short_description( wp_kses_post( $params['short_description'] ) );
+        // Core's rule for post content, with a note when filtering took something out (1.13.0).
+        $notes = [];
+        foreach ( [ 'description', 'short_description' ] as $field ) {
+            if ( isset( $params[ $field ] ) ) {
+                [ $html, $notes[] ] = self::filter_text( (string) $params[ $field ] );
+                $product->{'set_' . $field}( $html );
+            }
+        }
         if ( isset( $params['manage_stock'] ) )      $product->set_manage_stock( (bool) $params['manage_stock'] );
         if ( isset( $params['stock_qty'] ) )         $product->set_stock_quantity( absint( $params['stock_qty'] ) );
         if ( isset( $params['stock_status'] ) )      $product->set_stock_status( sanitize_key( $params['stock_status'] ) );
 
-        $product->save();
+        // Keeps the backslashes of every text field WooCommerce rewrites (1.13.0).
+        self::save_product( $product );
+        $note = current( array_filter( $notes ) );
 
         if ( isset( $params['categories'] ) ) {
             wp_set_post_terms( $product->get_id(), array_map( 'absint', (array) $params['categories'] ), 'product_cat' );
@@ -479,7 +590,7 @@ class Update_Product_Ability extends Ability {
             wp_set_post_terms( $product->get_id(), array_map( 'absint', (array) $params['tags'] ), 'product_tag' );
         }
 
-        return $this->success( "Product {$product->get_id()} updated." );
+        return $this->success( "Product {$product->get_id()} updated.", false !== $note ? [ 'note' => $note ] : [] );
     }
 }
 
