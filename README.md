@@ -2,7 +2,7 @@
 
 Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP.
 
-**Version 1.10.0.**
+**Version 1.11.0.**
 
 ---
 
@@ -31,11 +31,13 @@ Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooC
 
 | Tool | Description |
 |---|---|
-| `woocommerce-list-products` | List products with filters for status (trash too), SKU (exact, several comma-separated), type, category, tag, stock and search (which also matches part of a SKU) |
+| `woocommerce-list-products` | List products with filters for status (trash too), SKU (exact, several comma-separated), type, category, tag, stock and search (which also matches part of a SKU); `fields` returns only the fields named |
 | `woocommerce-get-product` | Retrieve full product details including variants and attributes |
 | `woocommerce-create-product` | Create a simple, grouped or external product |
 | `woocommerce-update-product` | Update product details, pricing, stock and status |
 | `woocommerce-delete-product` | Trash or permanently delete a product |
+
+**Smaller product lists (1.11.0).** `fields` names the fields to return (`["id", "name", "sku"]`); each product then has `id` plus only those. For 100 products, `["id", "name", "sku"]` is 7,718 characters instead of 29,019 (3.8 times smaller), and the address of each product is worked out only when `permalink` is named. Names that are not product fields are left out and said in `fields_note`, which also lists the fields that can be named. Without `fields` the answer is unchanged. It uses VGC AI Nexus 2.47.0's list helpers; with an older core the products stay whole and `fields_note` says why.
 
 **Finding products (1.10.0).** `sku` finds products by their exact SKU (several: comma-separated), and `search` also matches part of a SKU; both also find a variable product by one of its variations' SKUs. `status` `trash` lists the products in the trash. Any other status is refused: before 1.10.0 it quietly listed the published products, so a search of the trash looked empty.
 

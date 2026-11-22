@@ -10,6 +10,9 @@ defined( 'ABSPATH' ) || exit;
 
 class List_Products_Ability extends Ability {
 
+    /** The fields "fields" may name (1.11.0). */
+    public const ITEM_FIELDS = [ 'id', 'name', 'sku', 'type', 'status', 'price', 'regular_price', 'sale_price', 'stock_status', 'stock_qty', 'permalink' ];
+
     protected function define_meta(): void {
         $this->key          = 'wc_list_products';
         $this->label        = __( 'List Products', 'mcp-abilities-woo' );
@@ -29,6 +32,7 @@ class List_Products_Ability extends Ability {
                 'min_price'    => [ 'type' => 'number' ],
                 'max_price'    => [ 'type' => 'number' ],
                 'product_type' => [ 'type' => 'string',  'enum' => [ 'simple', 'variable', 'grouped', 'external' ] ],
+                'fields'       => [ 'type' => 'array', 'items' => [ 'type' => 'string' ], 'description' => 'Only these fields of each product (id is always kept), e.g. ["id", "name", "sku"]: a smaller answer. Fields: ' . implode( ', ', self::ITEM_FIELDS ) . '.' ],
             ],
         ];
     }
@@ -128,6 +132,15 @@ class List_Products_Ability extends Ability {
             return $this->error( $scope['error'] );
         }
 
+        // "fields" (1.11.0): only the fields named, sorted by AI Nexus 2.47.0's helpers.
+        // Unknown names are said in fields_note; with none known, products stay whole.
+        $named   = self::requested_fields( $params );
+        $helpers = self::core_has_field_helpers();
+        $split   = [ 'keep' => null, 'unknown' => [] ];
+        if ( $named && $helpers ) {
+            $split = \MCP_Abilities\Query_Support::split_fields( $named, self::ITEM_FIELDS, false );
+        }
+
         $query    = new \WP_Query( $args );
         $products = [];
         foreach ( $query->posts as $post ) {
@@ -135,12 +148,24 @@ class List_Products_Ability extends Ability {
             if ( ! $product || ! Access::can_read_product( $product ) ) {
                 continue;
             }
-            $products[] = $this->format_product( $product );
+            $products[] = $this->format_product( $product, $split['keep'] );
         }
 
         $out = [ 'products' => $products, 'total' => $query->found_posts ];
         if ( null !== $scope['note'] ) {
             $out['note'] = $scope['note'];
+        }
+        if ( $named && ! $helpers ) {
+            // Older core: whole products, as before 1.11.0, and the caller is told why.
+            $out['fields_note'] = sprintf(
+                '"fields" needs VGC AI Nexus 2.47.0 or later (this site has %s), so the products are whole.',
+                defined( 'MCP_ABILITIES_VERSION' ) ? MCP_ABILITIES_VERSION : 'an older version'
+            );
+        } elseif ( $named ) {
+            $note = \MCP_Abilities\Query_Support::fields_note( $products, [], $split['unknown'], self::ITEM_FIELDS );
+            if ( null !== $note ) {
+                $out['fields_note'] = $note;
+            }
         }
         return $this->json_result( $out );
     }
@@ -169,8 +194,35 @@ class List_Products_Ability extends Ability {
         return array_values( array_filter( array_map( 'intval', (array) $ids ) ) );
     }
 
-    private function format_product( \WC_Product $p ): array {
-        return [
+    /**
+     * The names in "fields", cleaned the way core's Query_Support::meta_keys() cleans them.
+     *
+     * @return string[]
+     */
+    private static function requested_fields( array $params ): array {
+        if ( empty( $params['fields'] ) || ! is_array( $params['fields'] ) ) {
+            return [];
+        }
+        return array_values( array_filter( array_map( 'sanitize_text_field', $params['fields'] ) ) );
+    }
+
+    /** Whether AI Nexus core has the list-field helpers (2.47.0 and later). */
+    private static function core_has_field_helpers(): bool {
+        $class = '\MCP_Abilities\Query_Support';
+        return class_exists( $class )
+            && method_exists( $class, 'split_fields' )
+            && method_exists( $class, 'finish_item' )
+            && method_exists( $class, 'fields_note' );
+    }
+
+    /**
+     * One product of the list: whole ($keep null, the same answer as 1.10.0), or id and
+     * the fields in $keep. The permalink is worked out only when it is kept.
+     *
+     * @param string[]|null $keep
+     */
+    private function format_product( \WC_Product $p, ?array $keep = null ): array {
+        $item = [
             'id'            => $p->get_id(),
             'name'          => $p->get_name(),
             'sku'           => $p->get_sku(),
@@ -181,8 +233,13 @@ class List_Products_Ability extends Ability {
             'sale_price'    => $p->get_sale_price(),
             'stock_status'  => $p->get_stock_status(),
             'stock_qty'     => $p->get_stock_quantity(),
-            'permalink'     => $p->get_permalink(),
+            'permalink'     => static fn() => $p->get_permalink(),
         ];
+        if ( null !== $keep ) {
+            return \MCP_Abilities\Query_Support::finish_item( $item, $keep );
+        }
+        $item['permalink'] = $item['permalink']();
+        return $item;
     }
 }
 
