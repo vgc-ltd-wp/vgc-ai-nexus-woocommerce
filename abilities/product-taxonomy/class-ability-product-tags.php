@@ -18,7 +18,7 @@ class List_Product_Tags_Ability extends Ability {
             'type'       => [ 'object', 'array' ],
             'properties' => [
                 'hide_empty' => [ 'type' => 'boolean', 'description' => 'Exclude tags with no products. Default: false.', 'default' => false ],
-                'per_page'   => [ 'type' => 'integer', 'default' => 50 ],
+                'per_page'   => [ 'type' => 'integer', 'default' => 50, 'description' => '1 to 200; -1 gives 200 (the most at once). "total" says how many there are.' ],
                 'page'       => [ 'type' => 'integer', 'default' => 1 ],
                 'search'     => [ 'type' => 'string',  'description' => 'Search tags by name.' ],
             ],
@@ -26,12 +26,17 @@ class List_Product_Tags_Ability extends Ability {
     }
 
     public function execute( array $params ): array {
-        $per_page = min( absint( $params['per_page'] ?? 50 ), 200 );
+        // per_page -1 gave 1 tag, and "total" was the size of this page (1.14.0).
+        $paging = mcp_woo_paging( $params, 50, 200 );
+        if ( is_string( $paging ) ) {
+            return $this->error( $paging );
+        }
+        [ $per_page, $page, $note ] = $paging;
         $args = [
             'taxonomy'   => 'product_tag',
             'hide_empty' => ! empty( $params['hide_empty'] ),
             'number'     => $per_page,
-            'offset'     => ( max( 1, absint( $params['page'] ?? 1 ) ) - 1 ) * $per_page,
+            'offset'     => ( $page - 1 ) * $per_page,
             'orderby'    => 'name',
             'order'      => 'ASC',
         ];
@@ -44,6 +49,9 @@ class List_Product_Tags_Ability extends Ability {
         if ( is_wp_error( $terms ) ) {
             return $this->error( $terms->get_error_message() );
         }
+        $count_args = $args;
+        unset( $count_args['number'], $count_args['offset'], $count_args['orderby'], $count_args['order'] );
+        $total = wp_count_terms( $count_args );
 
         $result = array_map( fn( $t ) => [
             'id'    => $t->term_id,
@@ -52,7 +60,10 @@ class List_Product_Tags_Ability extends Ability {
             'count' => $t->count,
         ], $terms );
 
-        return $this->json_result( [ 'tags' => $result, 'total' => count( $result ) ] );
+        return $this->json_result( mcp_woo_add_note( [
+            'tags'  => $result,
+            'total' => is_numeric( $total ) ? (int) $total : count( $result ),
+        ], $note ) );
     }
 }
 
@@ -111,30 +122,42 @@ class Create_Product_Tag_Ability extends Ability {
             'properties' => [
                 'name'        => [ 'type' => 'string', 'description' => 'Tag name.' ],
                 'slug'        => [ 'type' => 'string', 'description' => 'URL slug (auto-generated if omitted).' ],
-                'description' => [ 'type' => 'string', 'description' => 'Tag description.' ],
+                'description' => [ 'type' => 'string', 'description' => 'Tag description (HTML).' . Create_Product_Category_Ability::DESCRIPTION_RULE ],
             ],
             'required' => [ 'name' ],
         ];
     }
 
     public function execute( array $params ): array {
+        // HTML was taken out of the description with no word, and backslashes were lost (1.14.0).
+        $sent = (string) ( $params['description'] ?? '' );
         $args = [
-            'description' => sanitize_textarea_field( $params['description'] ?? '' ),
+            'description' => mcp_woo_term_description( $sent ),
         ];
         if ( ! empty( $params['slug'] ) ) {
             $args['slug'] = sanitize_title( $params['slug'] );
         }
 
-        $result = wp_insert_term( sanitize_text_field( $params['name'] ), 'product_tag', $args );
+        $result = wp_insert_term( wp_slash( sanitize_text_field( $params['name'] ) ), 'product_tag', $args );
 
         if ( is_wp_error( $result ) ) {
             return $this->error( $result->get_error_message() );
         }
 
-        return $this->json_result( [
+        $out  = [
             'id'      => $result['term_id'],
             'message' => 'Product tag created.',
-        ] );
+        ];
+        $term = get_term( (int) $result['term_id'], 'product_tag' );
+        if ( $term instanceof \WP_Term ) {
+            $out['slug'] = $term->slug;
+            $note        = mcp_woo_term_description_note( $sent, $term->description );
+            if ( null !== $note ) {
+                $out['description'] = $term->description;
+                $out['note']        = $note;
+            }
+        }
+        return $this->json_result( $out );
     }
 }
 
@@ -153,7 +176,7 @@ class Update_Product_Tag_Ability extends Ability {
                 'id'          => [ 'type' => 'integer', 'description' => 'Term ID to update.' ],
                 'name'        => [ 'type' => 'string' ],
                 'slug'        => [ 'type' => 'string' ],
-                'description' => [ 'type' => 'string' ],
+                'description' => [ 'type' => 'string', 'description' => 'New description (HTML).' . Create_Product_Category_Ability::DESCRIPTION_RULE ],
             ],
             'required' => [ 'id' ],
         ];
@@ -166,16 +189,33 @@ class Update_Product_Tag_Ability extends Ability {
         }
 
         $args = [];
-        if ( isset( $params['name'] ) )        { $args['name']        = sanitize_text_field( $params['name'] ); }
+        $sent = null;
+        if ( isset( $params['name'] ) )        { $args['name']        = wp_slash( sanitize_text_field( $params['name'] ) ); }
         if ( isset( $params['slug'] ) )        { $args['slug']        = sanitize_title( $params['slug'] ); }
-        if ( isset( $params['description'] ) ) { $args['description'] = sanitize_textarea_field( $params['description'] ); }
+        if ( isset( $params['description'] ) ) {
+            // HTML was taken out with no word, and backslashes were lost (1.14.0).
+            $sent                = (string) $params['description'];
+            $args['description'] = mcp_woo_term_description( $sent );
+        }
 
         $result = wp_update_term( $term_id, 'product_tag', $args );
         if ( is_wp_error( $result ) ) {
             return $this->error( $result->get_error_message() );
         }
 
-        return $this->success( "Product tag {$term_id} updated." );
+        $extra = [];
+        $term  = get_term( $term_id, 'product_tag' );
+        if ( $term instanceof \WP_Term ) {
+            if ( isset( $params['slug'] ) ) {
+                $extra['slug'] = $term->slug; // the stored slug (1.14.0)
+            }
+            $note = null !== $sent ? mcp_woo_term_description_note( $sent, $term->description ) : null;
+            if ( null !== $note ) {
+                $extra['description'] = $term->description;
+                $extra['note']        = $note;
+            }
+        }
+        return $this->success( "Product tag {$term_id} updated.", $extra );
     }
 }
 

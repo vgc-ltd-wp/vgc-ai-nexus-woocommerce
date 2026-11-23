@@ -19,30 +19,42 @@ class List_Product_Categories_Ability extends Ability {
             'properties' => [
                 'parent'     => [ 'type' => 'integer', 'description' => 'Parent term ID. 0 = top-level only. Omit for all.' ],
                 'hide_empty' => [ 'type' => 'boolean', 'description' => 'Exclude categories with no products. Default: false.', 'default' => false ],
-                'per_page'   => [ 'type' => 'integer', 'default' => 50 ],
+                'per_page'   => [ 'type' => 'integer', 'default' => 50, 'description' => '1 to 200; -1 gives 200 (the most at once). "total" says how many there are.' ],
                 'page'       => [ 'type' => 'integer', 'default' => 1 ],
             ],
         ];
     }
 
     public function execute( array $params ): array {
+        // per_page -1 gave 1 category, and "total" was the size of this page (1.14.0).
+        $paging = mcp_woo_paging( $params, 50, 200 );
+        if ( is_string( $paging ) ) {
+            return $this->error( $paging );
+        }
+        [ $per_page, $page, $note ] = $paging;
         $args = [
             'taxonomy'   => 'product_cat',
             'hide_empty' => ! empty( $params['hide_empty'] ),
-            'number'     => min( absint( $params['per_page'] ?? 50 ), 200 ),
-            'offset'     => ( max( 1, absint( $params['page'] ?? 1 ) ) - 1 ) * min( absint( $params['per_page'] ?? 50 ), 200 ),
+            'number'     => $per_page,
+            'offset'     => ( $page - 1 ) * $per_page,
             'orderby'    => 'name',
             'order'      => 'ASC',
         ];
 
-        if ( isset( $params['parent'] ) ) {
-            $args['parent'] = absint( $params['parent'] );
+        if ( isset( $params['parent'] ) && '' !== $params['parent'] ) {
+            if ( ! is_numeric( $params['parent'] ) || (int) $params['parent'] < 0 ) {
+                return $this->error( 'parent must be a category ID, or 0 for the top-level categories.' );
+            }
+            $args['parent'] = (int) $params['parent'];
         }
 
         $terms = get_terms( $args );
         if ( is_wp_error( $terms ) ) {
             return $this->error( $terms->get_error_message() );
         }
+        $count_args = $args;
+        unset( $count_args['number'], $count_args['offset'], $count_args['orderby'], $count_args['order'] );
+        $total = wp_count_terms( $count_args );
 
         $result = array_map( fn( $t ) => [
             'id'          => $t->term_id,
@@ -53,7 +65,10 @@ class List_Product_Categories_Ability extends Ability {
             'count'       => $t->count,
         ], $terms );
 
-        return $this->json_result( [ 'categories' => $result, 'total' => count( $result ) ] );
+        return $this->json_result( mcp_woo_add_note( [
+            'categories' => $result,
+            'total'      => is_numeric( $total ) ? (int) $total : count( $result ),
+        ], $note ) );
     }
 }
 
@@ -118,32 +133,67 @@ class Create_Product_Category_Ability extends Ability {
             'properties' => [
                 'name'        => [ 'type' => 'string', 'description' => 'Category name.' ],
                 'slug'        => [ 'type' => 'string', 'description' => 'URL slug (auto-generated if omitted).' ],
-                'description' => [ 'type' => 'string', 'description' => 'Category description.' ],
+                'description' => [ 'type' => 'string', 'description' => 'Category description (HTML).' . self::DESCRIPTION_RULE ],
                 'parent_id'   => [ 'type' => 'integer', 'description' => 'Parent category term ID. Default: 0 (top-level).' ],
             ],
             'required' => [ 'name' ],
         ];
     }
 
+    /** How a term description is stored (1.14.0). */
+    public const DESCRIPTION_RULE = ' WordPress keeps basic markup in a term description (links, bold, italic, code, quotes) and removes the rest, such as <p>; when it removed something, the result has a "note" and the stored "description".';
+
     public function execute( array $params ): array {
+        $parent = self::parent_id( $params );
+        if ( is_string( $parent ) ) {
+            return $this->error( $parent );
+        }
+        // HTML was taken out of the description with no word, and backslashes were lost (1.14.0).
+        $sent = (string) ( $params['description'] ?? '' );
         $args = [
-            'description' => sanitize_textarea_field( $params['description'] ?? '' ),
-            'parent'      => absint( $params['parent_id'] ?? 0 ),
+            'description' => mcp_woo_term_description( $sent ),
+            'parent'      => $parent,
         ];
         if ( ! empty( $params['slug'] ) ) {
             $args['slug'] = sanitize_title( $params['slug'] );
         }
 
-        $result = wp_insert_term( sanitize_text_field( $params['name'] ), 'product_cat', $args );
+        $result = wp_insert_term( wp_slash( sanitize_text_field( $params['name'] ) ), 'product_cat', $args );
 
         if ( is_wp_error( $result ) ) {
             return $this->error( $result->get_error_message() );
         }
 
-        return $this->json_result( [
+        $out  = [
             'id'      => $result['term_id'],
             'message' => 'Product category created.',
-        ] );
+        ];
+        $term = get_term( (int) $result['term_id'], 'product_cat' );
+        if ( $term instanceof \WP_Term ) {
+            $out['slug'] = $term->slug;
+            $note        = mcp_woo_term_description_note( $sent, $term->description );
+            if ( null !== $note ) {
+                $out['description'] = $term->description;
+                $out['note']        = $note;
+            }
+        }
+        return $this->json_result( $out );
+    }
+
+    /**
+     * The parent category's ID, or why it is refused (1.14.0): absint() made -5 into
+     * category 5. WordPress refuses an ID that is not a category itself.
+     *
+     * @return int|string
+     */
+    public static function parent_id( array $params ) {
+        if ( ! isset( $params['parent_id'] ) || '' === $params['parent_id'] ) {
+            return 0;
+        }
+        if ( ! is_numeric( $params['parent_id'] ) || (int) $params['parent_id'] < 0 ) {
+            return 'parent_id must be a category ID, or 0 for a top-level category.';
+        }
+        return (int) $params['parent_id'];
     }
 }
 
@@ -162,8 +212,8 @@ class Update_Product_Category_Ability extends Ability {
                 'id'          => [ 'type' => 'integer', 'description' => 'Term ID to update.' ],
                 'name'        => [ 'type' => 'string' ],
                 'slug'        => [ 'type' => 'string' ],
-                'description' => [ 'type' => 'string' ],
-                'parent_id'   => [ 'type' => 'integer' ],
+                'description' => [ 'type' => 'string', 'description' => 'New description (HTML).' . Create_Product_Category_Ability::DESCRIPTION_RULE ],
+                'parent_id'   => [ 'type' => 'integer', 'description' => 'Parent category term ID; 0 makes it top-level.' ],
             ],
             'required' => [ 'id' ],
         ];
@@ -176,17 +226,41 @@ class Update_Product_Category_Ability extends Ability {
         }
 
         $args = [];
-        if ( isset( $params['name'] ) )        { $args['name']        = sanitize_text_field( $params['name'] ); }
+        $sent = null;
+        if ( isset( $params['name'] ) )        { $args['name']        = wp_slash( sanitize_text_field( $params['name'] ) ); }
         if ( isset( $params['slug'] ) )        { $args['slug']        = sanitize_title( $params['slug'] ); }
-        if ( isset( $params['description'] ) ) { $args['description'] = sanitize_textarea_field( $params['description'] ); }
-        if ( isset( $params['parent_id'] ) )   { $args['parent']      = absint( $params['parent_id'] ); }
+        if ( isset( $params['description'] ) ) {
+            // HTML was taken out with no word, and backslashes were lost (1.14.0).
+            $sent                = (string) $params['description'];
+            $args['description'] = mcp_woo_term_description( $sent );
+        }
+        if ( isset( $params['parent_id'] ) ) {
+            $parent = Create_Product_Category_Ability::parent_id( $params );
+            if ( is_string( $parent ) ) {
+                return $this->error( $parent );
+            }
+            $args['parent'] = $parent;
+        }
 
         $result = wp_update_term( $term_id, 'product_cat', $args );
         if ( is_wp_error( $result ) ) {
             return $this->error( $result->get_error_message() );
         }
 
-        return $this->success( "Product category {$term_id} updated." );
+        $extra = [];
+        $term  = get_term( $term_id, 'product_cat' );
+        if ( $term instanceof \WP_Term ) {
+            // The stored slug: WordPress makes a taken or unusable one unique (1.14.0).
+            if ( isset( $params['slug'] ) ) {
+                $extra['slug'] = $term->slug;
+            }
+            $note = null !== $sent ? mcp_woo_term_description_note( $sent, $term->description ) : null;
+            if ( null !== $note ) {
+                $extra['description'] = $term->description;
+                $extra['note']        = $note;
+            }
+        }
+        return $this->success( "Product category {$term_id} updated.", $extra );
     }
 }
 

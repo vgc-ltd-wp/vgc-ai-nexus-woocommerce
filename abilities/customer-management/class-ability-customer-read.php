@@ -87,26 +87,44 @@ class List_Customer_Orders_Ability extends Ability {
     protected function define_meta(): void {
         $this->key          = 'wc_list_customer_orders';
         $this->label        = __( 'List Customer Orders', 'mcp-abilities-woo' );
-        $this->description  = 'List all orders for a specific WooCommerce customer.';
+        $this->description  = 'List a WooCommerce customer\'s orders, newest first, a page at a time: "total" says how many there are, "page" gives the next ones.';
         $this->required_cap = 'edit_shop_orders';
         $this->input_schema = [
             'type'       => 'object',
             'properties' => [
                 'id'       => [ 'type' => 'integer', 'description' => 'Customer user ID.' ],
-                'per_page' => [ 'type' => 'integer', 'default' => 10 ],
+                'per_page' => [ 'type' => 'integer', 'default' => 10, 'description' => '1 to 50; -1 gives 50 (the most at once).' ],
+                'page'     => [ 'type' => 'integer', 'default' => 1 ],
             ],
             'required' => [ 'id' ],
         ];
     }
 
     public function execute( array $params ): array {
+        // The list stopped at 50 with no page and no total, although the tool said "all
+        // orders" (1.14.0).
+        $paging = mcp_woo_paging( $params, 10, 50 );
+        if ( is_string( $paging ) ) {
+            return $this->error( $paging );
+        }
+        [ $per_page, $page, $note ] = $paging;
+        if ( ! is_numeric( $params['id'] ?? null ) || (int) $params['id'] < 1 ) {
+            // absint() made -5 into customer 5 (1.14.0).
+            return $this->error( 'id must be a customer\'s user ID (1 or more).' );
+        }
+
         // Orders this account may not read are left out (1.9.0).
-        $orders = Access::readable_orders( (array) wc_get_orders( [
-            'customer_id' => absint( $params['id'] ),
-            'limit'       => min( absint( $params['per_page'] ?? 10 ), 50 ),
+        $found  = wc_get_orders( [
+            'customer_id' => (int) $params['id'],
+            'limit'       => $per_page,
+            'page'        => $page,
+            'paginate'    => true,
             'orderby'     => 'date',
             'order'       => 'DESC',
-        ] ) );
+        ] );
+        $all    = is_object( $found ) && isset( $found->orders ) ? (array) $found->orders : (array) $found;
+        $total  = is_object( $found ) && isset( $found->total ) ? (int) $found->total : count( $all );
+        $orders = Access::readable_orders( $all );
 
         $result = array_map( fn( $o ) => [
             'id'           => $o->get_id(),
@@ -117,6 +135,8 @@ class List_Customer_Orders_Ability extends Ability {
             'items_count'  => count( $o->get_items() ),
         ], $orders );
 
-        return $this->json_result( [ 'orders' => $result ] );
+        $out = mcp_woo_add_note( [ 'orders' => $result, 'total' => $total ], $note );
+        $out = mcp_woo_add_note( $out, mcp_woo_left_out_note( count( array_filter( $all, static fn( $o ) => $o instanceof \WC_Order ) ) - count( $orders ), 'order' ) );
+        return $this->json_result( $out );
     }
 }

@@ -13,17 +13,19 @@ class List_Orders_Ability extends Ability {
     protected function define_meta(): void {
         $this->key          = 'wc_list_orders';
         $this->label        = __( 'List Orders', 'mcp-abilities-woo' );
-        $this->description  = 'List WooCommerce orders with optional status and date filters.';
+        $this->description  = 'List WooCommerce orders, newest first, with optional status, customer and date filters. "total" says how many orders match.';
         $this->required_cap = 'edit_shop_orders';
         $this->input_schema = [
             'type'       => 'object',
             'properties' => [
-                'status'    => [ 'type' => 'string',  'enum' => [ 'any', 'pending', 'processing', 'on-hold', 'completed', 'cancelled', 'refunded', 'failed' ], 'default' => 'any' ],
-                'per_page'  => [ 'type' => 'integer', 'default' => 20 ],
+                // An open list (1.14.0): a shop adds its own order statuses, so these are
+                // samples, not an enum. execute() checks the value against the shop's.
+                'status'    => [ 'type' => 'string',  'examples' => [ 'any', 'pending', 'processing', 'on-hold', 'completed', 'cancelled', 'refunded', 'failed', 'checkout-draft' ], 'default' => 'any', 'description' => '"any" (every status, unfinished checkouts "checkout-draft" included), or an order status of this shop, e.g. processing, completed; a shop may add its own. The "wc-" prefix may be left out. An unknown status is refused with the valid ones.' ],
+                'per_page'  => [ 'type' => 'integer', 'default' => 20, 'description' => '1 to 100; -1 gives 100 (the most at once).' ],
                 'page'      => [ 'type' => 'integer', 'default' => 1 ],
-                'customer_id' => [ 'type' => 'integer', 'description' => 'Filter by customer user ID.' ],
-                'date_after'  => [ 'type' => 'string',  'description' => 'ISO8601 date. Orders placed after this day (site time; the day itself is not included).' ],
-                'date_before' => [ 'type' => 'string',  'description' => 'ISO8601 date. Orders placed before this day (site time; the day itself is not included).' ],
+                'customer_id' => [ 'type' => 'integer', 'description' => 'Filter by customer user ID; 0 lists the guest orders (no customer account).' ],
+                'date_after'  => [ 'type' => 'string',  'description' => 'A day, YYYY-MM-DD. Orders placed after this day (site time; the day itself is not included). A time of day is not used.' ],
+                'date_before' => [ 'type' => 'string',  'description' => 'A day, YYYY-MM-DD. Orders placed before this day (site time; the day itself is not included). A time of day is not used.' ],
                 'search'    => [ 'type' => 'string',  'description' => 'Search by order number, billing name or email.' ],
             ],
         ];
@@ -36,21 +38,36 @@ class List_Orders_Ability extends Ability {
             return $this->error( "Invalid status '{$status}'. Valid options: any, " . implode( ', ', array_map( 'mcp_woo_order_status_slug', $statuses ) ) . '.' );
         }
 
+        // per_page -1 gave 1 order, more than 100 was cut down with no word, and there was no
+        // total (1.14.0).
+        $paging = mcp_woo_paging( $params, 20, 100 );
+        if ( is_string( $paging ) ) {
+            return $this->error( $paging );
+        }
+        [ $per_page, $page, $note ] = $paging;
+
         $args = [
-            'limit'    => min( absint( $params['per_page'] ?? 20 ), 100 ),
-            'page'     => max( 1, absint( $params['page'] ?? 1 ) ),
+            'limit'    => $per_page,
+            'page'     => $page,
+            'paginate' => true,
             'status'   => ( '' === $status || 'any' === $status ) ? $statuses : [ 'wc-' . $status ],
             'orderby'  => 'date',
             'order'    => 'DESC',
             'return'   => 'objects',
         ];
 
-        if ( ! empty( $params['customer_id'] ) ) {
-            $args['customer_id'] = absint( $params['customer_id'] );
+        // customer_id 0 (guest orders) listed every order, and a negative ID was read as
+        // another customer's (1.14.0).
+        if ( isset( $params['customer_id'] ) && '' !== $params['customer_id'] ) {
+            if ( ! is_numeric( $params['customer_id'] ) || (int) $params['customer_id'] < 0 ) {
+                return $this->error( 'customer_id must be a customer\'s user ID, or 0 for guest orders.' );
+            }
+            $args['customer_id'] = (int) $params['customer_id'];
         }
 
         // Dates are whole days in site time, both ends left out (WooCommerce's ">" and "<").
-        // With both, the same range is written as the days in between, inclusive.
+        // With both, the same range is written as the days in between, inclusive. A time of
+        // day was dropped with no word (1.14.0: the note says so).
         $days = [];
         foreach ( [ 'date_after' => 1, 'date_before' => -1 ] as $name => $shift ) {
             if ( empty( $params[ $name ] ) ) {
@@ -58,9 +75,12 @@ class List_Orders_Ability extends Ability {
             }
             $date = sanitize_text_field( (string) $params[ $name ] );
             if ( false === strtotime( $date ) ) {
-                return $this->error( "Invalid {$name} value '{$date}'. Use ISO8601 format, e.g. 2024-01-15 or 2024-01-15T00:00:00." );
+                return $this->error( "Invalid {$name} value '{$date}'. Use a day, YYYY-MM-DD, e.g. 2024-01-15." );
             }
             $days[ $name ] = [ wc_string_to_datetime( $date ), $shift ];
+            if ( preg_match( '/\d{1,2}:\d{2}/', $date ) ) {
+                $note = ( null !== $note ? $note . ' ' : '' ) . sprintf( '%s: only the day of "%s" was used (%s); dates are whole days in site time, the day itself not included.', $name, $date, $days[ $name ][0]->date( 'Y-m-d' ) );
+            }
         }
         if ( 2 === count( $days ) ) {
             $range = array_map( static function ( array $d ): string {
@@ -87,8 +107,11 @@ class List_Orders_Ability extends Ability {
             }
         }
 
-        // Orders this account may not read are left out (1.9.0).
-        $orders = Access::readable_orders( (array) wc_get_orders( $args ) );
+        // Orders this account may not read are left out (1.9.0), and the note says how many.
+        $found  = wc_get_orders( $args );
+        $all    = is_object( $found ) && isset( $found->orders ) ? (array) $found->orders : (array) $found;
+        $total  = is_object( $found ) && isset( $found->total ) ? (int) $found->total : count( $all );
+        $orders = Access::readable_orders( $all );
         $result = array_map( fn( $o ) => [
             'id'             => $o->get_id(),
             'number'         => $o->get_order_number(),
@@ -103,7 +126,9 @@ class List_Orders_Ability extends Ability {
             'payment_method' => $o->get_payment_method_title(),
         ], $orders );
 
-        return $this->json_result( [ 'orders' => $result ] );
+        $out = mcp_woo_add_note( [ 'orders' => $result, 'total' => $total ], $note );
+        $out = mcp_woo_add_note( $out, mcp_woo_left_out_note( count( array_filter( $all, static fn( $o ) => $o instanceof \WC_Order ) ) - count( $orders ), 'order' ) );
+        return $this->json_result( $out );
     }
 }
 
@@ -187,13 +212,14 @@ class Update_Order_Status_Ability extends Ability {
     protected function define_meta(): void {
         $this->key          = 'wc_update_order_status';
         $this->label        = __( 'Update Order Status', 'mcp-abilities-woo' );
-        $this->description  = 'Change the status of a WooCommerce order with an optional note.';
+        $this->description  = 'Change the status of a WooCommerce order with an optional note. An order that already has the status keeps it, and the note is still added.';
         $this->required_cap = 'edit_shop_orders';
         $this->input_schema = [
             'type'       => 'object',
             'properties' => [
                 'id'     => [ 'type' => 'integer', 'description' => 'Order ID.' ],
-                'status' => [ 'type' => 'string', 'enum' => [ 'pending', 'processing', 'on-hold', 'completed', 'cancelled', 'refunded', 'failed' ], 'description' => 'New status (without wc- prefix).' ],
+                // An open list (1.14.0): a shop adds its own order statuses. execute() checks it.
+                'status' => [ 'type' => 'string', 'examples' => [ 'pending', 'processing', 'on-hold', 'completed', 'cancelled', 'refunded', 'failed' ], 'description' => 'New status: an order status of this shop (the "wc-" prefix may be left out), e.g. processing, completed; a shop may add its own. An unknown status is refused with the valid ones.' ],
                 'note'   => [ 'type' => 'string', 'description' => 'Optional order note.' ],
             ],
             'required' => [ 'id', 'status' ],
@@ -217,9 +243,31 @@ class Update_Order_Status_Ability extends Ability {
         }
 
         $note = sanitize_textarea_field( $params['note'] ?? '' );
-        $order->update_status( $new_status, $note, true );
+        $id   = $order->get_id();
 
-        return $this->success( "Order {$order->get_id()} status updated to '{$new_status}'." );
+        // WooCommerce stores the note only when the status changes, so an order that already
+        // had it lost the note while the answer said "updated" (1.14.0).
+        if ( $order->get_status() === $new_status ) {
+            $note_id = '' !== $note ? (int) $order->add_order_note( $note, 0, true ) : 0;
+            if ( '' !== $note && $note_id < 1 ) {
+                return $this->error( "Order {$id} already had the status '{$new_status}', and the note could not be added." );
+            }
+            return $this->success(
+                "Order {$id} already had the status '{$new_status}'; nothing changed" . ( $note_id ? ', and the note was added.' : '.' ),
+                array_merge( [ 'status' => $new_status, 'changed' => false ], $note_id ? [ 'note_id' => $note_id ] : [] )
+            );
+        }
+
+        // update_status() answers false when WooCommerce caught an error, and the answer
+        // said "updated" (1.14.0). The order is read again: a plugin may have stopped it.
+        $done  = $order->update_status( $new_status, $note, true );
+        $fresh = wc_get_order( $id );
+        $now   = $fresh ? $fresh->get_status() : '';
+        if ( ! $done || $now !== $new_status ) {
+            return $this->error( "Order {$id}'s status is '{$now}', not '{$new_status}': WooCommerce or a plugin refused or changed it (the order's notes may say why)." );
+        }
+
+        return $this->success( "Order {$id} status updated to '{$new_status}'.", [ 'status' => $now, 'changed' => true ] );
     }
 }
 
@@ -257,6 +305,10 @@ class Add_Order_Note_Ability extends Ability {
             ! empty( $params['customer_note'] ) ? 1 : 0,
             true
         );
+        if ( (int) $note_id < 1 ) {
+            // A note WordPress did not store answered "note_id": 0 (1.14.0).
+            return $this->error( "The note could not be added to order {$order->get_id()}." );
+        }
 
         return $this->json_result( [ 'note_id' => $note_id ] );
     }

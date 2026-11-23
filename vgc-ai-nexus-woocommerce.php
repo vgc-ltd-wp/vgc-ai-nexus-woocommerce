@@ -3,7 +3,7 @@
  * Plugin Name:       VGC AI Nexus for WooCommerce
  * Plugin URI:        https://tools.vgc-ltd.com
  * Description:       Extends VGC AI Nexus with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP. Requires VGC AI Nexus and WooCommerce.
- * Version:           1.13.0
+ * Version:           1.14.0
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            VGC
@@ -16,7 +16,7 @@
 defined( 'ABSPATH' ) || exit;
 
 /* VGC self-hosted updates: shows the native WordPress "Update now" button (no token; manifest is public). */
-define( 'MCP_WOO_VERSION', '1.13.0' );
+define( 'MCP_WOO_VERSION', '1.14.0' );
 require_once __DIR__ . '/includes/class-vgc-plugin-updater.php'; // fallback when core is missing or older than 2.37
 require_once __DIR__ . '/includes/class-woo-access.php';
 // AI Nexus core's updater (2.37.0+) takes a package only from the update channel and
@@ -261,6 +261,11 @@ function mcp_woo_order_status_slug( string $status ): string {
  * With tool consolidation on, each tool is core's dispatcher, which checks the
  * chosen action itself.
  *
+ * A parameter the tool does not have is named in the answer ("ignored_parameters" and
+ * a "warning"), as core's own tools do (1.14.0): before, it was dropped without a word
+ * and a list filtered by a wrongly spelt parameter looked filtered. The dispatcher
+ * does this itself against the chosen action's own parameters.
+ *
  * @param array<string,mixed> $params
  * @return array<string,mixed>
  */
@@ -273,14 +278,177 @@ function mcp_woo_run( \MCP_Abilities\Ability $ability, array $params ): array {
                 : 'AI Nexus is in read-only mode on this site.',
         ];
     }
-    if ( ! $ability instanceof \MCP_Abilities\Crud_Ability && method_exists( $ability, 'validate_params' ) ) {
+    $dispatcher = $ability instanceof \MCP_Abilities\Crud_Ability;
+    if ( ! $dispatcher && method_exists( $ability, 'validate_params' ) ) {
         $checked = $ability->validate_params( $params );
         if ( is_string( $checked ) ) {
             return [ 'success' => false, 'error' => $checked ];
         }
         $params = $checked;
     }
-    return $ability->execute( $params );
+    $result = $ability->execute( $params );
+    if ( ! $dispatcher && method_exists( $ability, 'annotate_ignored_params' ) ) {
+        $result = $ability->annotate_ignored_params( $result, $params );
+    }
+    return $result;
+}
+
+/**
+ * The page size and page of a list call (1.14.0), or why they are refused.
+ *
+ * absint() turned per_page -1 ("all", as WP_Query reads it) into 1 and page -2 into 2;
+ * a page size above the tool's most was cut down without a word. Now -1 and anything
+ * above $max give $max, and the note says so; 0, other negatives and a page below 1
+ * are refused.
+ *
+ * @param array<string,mixed> $params
+ * @return array{0:int,1:int,2:?string}|string [ per_page, page, note or null ], or the error.
+ */
+function mcp_woo_paging( array $params, int $default, int $max ) {
+    $per  = $params['per_page'] ?? $default;
+    $page = $params['page'] ?? 1;
+    if ( null === $per || '' === $per ) {
+        $per = $default;
+    }
+    if ( null === $page || '' === $page ) {
+        $page = 1;
+    }
+    if ( ! is_numeric( $per ) || (int) $per != $per ) { // phpcs:ignore Universal.Operators.StrictComparisons -- "20" and 20.0 are 20.
+        return sprintf( 'per_page must be a whole number from 1 to %d (or -1 for %d at once).', $max, $max );
+    }
+    if ( ! is_numeric( $page ) || (int) $page != $page || (int) $page < 1 ) { // phpcs:ignore Universal.Operators.StrictComparisons
+        return 'page must be a whole number, 1 or more.';
+    }
+    $per  = (int) $per;
+    $note = null;
+    if ( -1 === $per ) {
+        $per  = $max;
+        $note = sprintf( 'per_page -1 ("all") gives the most this tool returns at once: %d. "total" says how many there are; ask for the next page with "page".', $max );
+    } elseif ( $per < 1 ) {
+        return sprintf( 'per_page must be from 1 to %d (or -1 for %d at once), not %d.', $max, $max, $per );
+    } elseif ( $per > $max ) {
+        $note = sprintf( 'per_page %d is more than this tool returns at once, so %d were asked for. "total" says how many there are; ask for the next page with "page".', $per, $max );
+        $per  = $max;
+    }
+    return [ $per, (int) $page, $note ];
+}
+
+/**
+ * The stock statuses this shop's WooCommerce accepts (1.14.0): instock, outofstock,
+ * onbackorder and any a plugin adds (woocommerce_product_stock_status_options).
+ * WooCommerce's set_stock_status() saves "instock" for any other value.
+ *
+ * @return string[]
+ */
+function mcp_woo_stock_statuses(): array {
+    $options = function_exists( 'wc_get_product_stock_status_options' ) ? (array) wc_get_product_stock_status_options() : [];
+    $keys    = array_values( array_filter( array_map( 'strval', array_keys( $options ) ) ) );
+    return $keys ? $keys : [ 'instock', 'outofstock', 'onbackorder' ];
+}
+
+/**
+ * A price as it may be stored, or why it is refused (1.14.0).
+ *
+ * wc_format_decimal() made "abc" or "free" into "" (the price erased, the product no
+ * longer for sale) and "19,99" into 1999 on a shop that writes "." for decimals. Now a
+ * plain number: digits with "." for decimals ("19.99", or a JSON number), or "," when
+ * that is the shop's decimal separator; no thousands separators, currency signs or minus.
+ * "" clears the price, as before.
+ *
+ * @param mixed $value
+ * @return array{0:?string,1:?string} [ price to store or null, error or null ]
+ */
+function mcp_woo_price( string $param, $value ): array {
+    if ( is_bool( $value ) || ! is_scalar( $value ) ) {
+        return [ null, sprintf( 'Invalid %s: send a number as text, e.g. "19.99", or "" to clear the price.', $param ) ];
+    }
+    $raw = trim( (string) $value );
+    if ( '' === $raw ) {
+        return [ '', null ];
+    }
+    $sep   = function_exists( 'wc_get_price_decimal_separator' ) ? wc_get_price_decimal_separator() : '.';
+    $plain = preg_match( '/^\d+(\.\d+)?$/', $raw ) || ( ',' === $sep && preg_match( '/^\d+,\d+$/', $raw ) );
+    if ( ! $plain ) {
+        return [ null, sprintf(
+            'Invalid %s "%s": send a plain number with "." for decimals, e.g. "19.99" (no thousands separators, currency signs or minus). Send "" to clear the price.',
+            $param,
+            $raw
+        ) ];
+    }
+    return [ wc_format_decimal( $raw ), null ];
+}
+
+/**
+ * Add a sentence to the answer's "note", after any note it already has (1.14.0).
+ *
+ * @param array<string,mixed> $out
+ * @return array<string,mixed>
+ */
+function mcp_woo_add_note( array $out, ?string $note ): array {
+    if ( null === $note || '' === $note ) {
+        return $out;
+    }
+    $out['note'] = isset( $out['note'] ) && '' !== (string) $out['note'] ? $out['note'] . ' ' . $note : $note;
+    return $out;
+}
+
+/**
+ * Items a list left out because this account may not read them (1.14.0): the page is
+ * shorter than per_page, and "total" counts them. Before, nothing said so.
+ */
+function mcp_woo_left_out_note( int $count, string $item ): ?string {
+    if ( $count < 1 ) {
+        return null;
+    }
+    return 1 === $count
+        ? sprintf( '1 %s on this page is left out: this account may not read it. The page is shorter than per_page, and "total" counts it.', $item )
+        : sprintf( '%d %ss on this page are left out: this account may not read them. The page is shorter than per_page, and "total" counts them.', $count, $item );
+}
+
+/**
+ * A term description as it is handed to WordPress (1.14.0).
+ *
+ * sanitize_textarea_field() took every tag out (links, bold, italic) with no word. Now
+ * WordPress's own rule for term descriptions, as on its admin screens: it keeps basic
+ * markup (links, bold, italic, code, quotes) and removes the rest (<p>, scripts, styles)
+ * for every account (the pre_term_description filter). For an account that may not post
+ * unfiltered HTML, or while raw code is locked, the same rule is applied here first, in
+ * case a plugin lifted WordPress's filter. Whatever was removed is said in a note, decided
+ * from what was stored: mcp_woo_term_description_note(). Slashed: wp_insert_term() and
+ * wp_update_term() unslash, so every backslash was lost.
+ */
+function mcp_woo_term_description( string $sent ): string {
+    $raw = class_exists( '\MCP_Abilities\Custom_Code' ) && method_exists( '\MCP_Abilities\Custom_Code', 'raw_allowed' )
+        ? \MCP_Abilities\Custom_Code::raw_allowed()
+        : current_user_can( 'unfiltered_html' );
+    return wp_slash( $raw ? $sent : wp_kses( $sent, 'pre_term_description' ) );
+}
+
+/** The note for a term description that was not stored as sent, or null (1.14.0). */
+function mcp_woo_term_description_note( string $sent, string $stored ): ?string {
+    if ( $stored === $sent ) {
+        return null;
+    }
+    if ( class_exists( '\MCP_Abilities\Custom_Code' ) && method_exists( '\MCP_Abilities\Custom_Code', 'filtered_away' ) ) {
+        $removed = \MCP_Abilities\Custom_Code::filtered_away( $sent, $stored );
+    } else {
+        // Core before 2.49.0: the tags and attribute names, in order ("&" written as
+        // "&amp;" or "<br/>" as "<br />" loses nothing).
+        $outline = static function ( string $html ): array {
+            preg_match_all( '/<\s*(\/?)\s*([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>/', $html, $tags, PREG_SET_ORDER );
+            $out = [];
+            foreach ( $tags as $t ) {
+                preg_match_all( '/([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=/', $t[3], $attrs );
+                $out[] = $t[1] . strtolower( $t[2] ) . ':' . strtolower( implode( ',', $attrs[1] ) );
+            }
+            return $out;
+        };
+        $removed = $outline( $sent ) !== $outline( $stored );
+    }
+    if ( ! $removed ) {
+        return null;
+    }
+    return 'WordPress keeps only basic markup in a term description (links, bold, italic, code, quotes), so the rest was removed before saving: "description" is what was stored.';
 }
 
 /**

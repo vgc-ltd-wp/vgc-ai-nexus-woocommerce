@@ -2,7 +2,26 @@
 
 Extends **[VGC AI Nexus](https://github.com/vgc-ltd-wp/vgc-ai-nexus)** with WooCommerce tools. Gives AI agents the ability to manage products, product categories, product tags, orders, customers and coupons through MCP.
 
-**Version 1.13.0.**
+**Version 1.14.0.**
+
+---
+
+## 1.14.0: a value the tools cannot use is refused, not quietly replaced
+
+The audit of 2026-11-23 found places where a tool, given a value WooCommerce could not use, did something else and still answered "done". An AI caller cannot see that and reports the wrong result as true. Now the tool refuses with the valid values, or answers with what was stored and a `note`.
+
+- **Stock.** An unknown `stock_status` ("sold_out", "out-of-stock") is refused with this shop's stock statuses; before, WooCommerce saved it as "instock" (update) or the default was kept (create). `stock_qty` without stock tracking is refused, naming `manage_stock` (WooCommerce erased the quantity). A product that tracks stock gets its stock status from the quantity: the answer now says so when the status sent was not kept. A negative quantity (backorders) is stored as sent; it was made positive.
+- **Prices.** `regular_price` and `sale_price` must be a plain number with "." for decimals ("19.99"), or "," on a shop that writes decimals with ","; "" clears the price, as before. "19,99" on a "." shop became 1999, and "abc" or "free" erased the price. A sale price that is not lower than the regular price is not kept by WooCommerce; the answer says so. Create and update give back the stored prices and stock (`regular_price`, `sale_price`, `price`, `stock_status`, `stock_qty`, `manage_stock`, `sku`, for the fields sent).
+- **Categories and tags.** An ID that is not a product category (or tag) is refused, pointing to `wc_list_product_categories`; WordPress skipped it. The list filters `category` and `tag` refuse an unknown slug, and say the slug when an ID or a name was sent; `product_type` and `stock` refuse an unknown value with this shop's types and stock statuses. Before, each gave an empty list.
+- **Variations and variable products.** A variation's name, short description, categories and tags, and a variable or grouped product's price, are refused: WooCommerce makes or takes them from elsewhere and the value was lost.
+- **Deleting.** A trash or delete that WordPress or a plugin stopped is an error (it was reported as done). Where the trash is turned off (`EMPTY_TRASH_DAYS` 0), trashing is refused, because it would delete for good; `force: true` deletes. A product already in the trash answers "already in the trash".
+- **Lists.** `max_price: 0` lists the free products (it was ignored). `per_page: -1` gives the most a tool returns at once, with a `note` (it gave 1); 0, other negatives and a `page` below 1 are refused; more than the most is cut down with a `note`. `wc_list_orders` and `wc_list_customer_orders` have a `total`, and the customer's orders a `page`; the categories' and tags' `total` is every one, not the page's size. Items the account may not read are counted in a `note`.
+- **Orders.** `customer_id: 0` lists the guest orders (it listed every order); a negative ID is refused. A time of day in `date_after` / `date_before` is not used, and the `note` says so. `wc_update_order_status` to the status the order already has adds the note and says "already" (WooCommerce dropped the note); a change WooCommerce refused is an error.
+- **Coupons.** An `expiry_date` that is not YYYY-MM-DD is refused (it made the coupon already expired, 1970); a date that is not after today is taken with a `note`. `usage_limit: -1` is refused (it became 1 use; 0 is unlimited). A code another coupon has is refused. `wc_list_coupons` takes `status` and `page`.
+- **Saves.** A product, coupon or order note the database did not store is an error; the answer was `"id": 0`.
+- **Term descriptions.** Category and tag descriptions keep the markup WordPress keeps in a term description (links, bold, italic, code, quotes) and their backslashes; `sanitize_textarea_field()` took all of it out. When WordPress removes markup (a `<p>`, or a script for an account without `unfiltered_html`), the answer has a `note` and the stored `description`. Names keep their backslashes.
+- **Unknown parameters.** With tool consolidation off, a parameter the tool does not have is named in `ignored_parameters` with a `warning`, as AI Nexus core's tools do.
+- **Allowed values (AI Nexus 2.52.0).** Core 2.52.0 refuses a value outside a tool's `enum`. The lists that are the shop's own (`wc_list_orders` / `wc_update_order_status` `status`, `wc_list_products` `stock` and `product_type`) are now `examples`, checked against the shop, so a shop's own order status, a stock status or product type a plugin adds keeps working. `wc_update_product` `stock_status` and `wc_create_product` `type` have an `enum`. With an older core the tools check the values themselves.
 
 ---
 
